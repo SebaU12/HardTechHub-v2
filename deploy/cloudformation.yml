@@ -171,11 +171,11 @@ Resources:
           FromPort: 27017
           ToPort: 27017
           SourceSecurityGroupId: !Ref SGApp
-        - Description: "SSH desde VPC"
+        - Description: "SSH admin"
           IpProtocol: tcp
           FromPort: 22
           ToPort: 22
-          CidrIp: !Ref VpcCidr
+          CidrIp: "0.0.0.0/0"
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-sg-data"
