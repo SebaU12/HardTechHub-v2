@@ -95,7 +95,7 @@ Resources:
   SGVPCLink:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: "HardTech VPC Link — salida al ALB interno"
+      GroupDescription: "HardTech VPC Link - salida al ALB interno"
       VpcId: !Ref VpcId
       Tags:
         - Key: Name
@@ -105,10 +105,10 @@ Resources:
   SGALB:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: "HardTech ALB interno — HTTP desde VPC Link"
+      GroupDescription: "HardTech ALB interno - HTTP desde VPC Link"
       VpcId: !Ref VpcId
       SecurityGroupIngress:
-        - Description: "HTTP desde VPC Link (API Gateway)"
+        - Description: "HTTP desde VPC Link API Gateway"
           IpProtocol: tcp
           FromPort: 80
           ToPort: 80
@@ -121,7 +121,7 @@ Resources:
   SGApp:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: "HardTech VMs app — servicios desde ALB y SSH desde VPC"
+      GroupDescription: "HardTech VMs app - servicios desde ALB y SSH desde VPC"
       VpcId: !Ref VpcId
       SecurityGroupIngress:
         - Description: "Cinco APIs desde ALB"
@@ -142,7 +142,7 @@ Resources:
   SGData:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: "HardTech VM datos — DB solo desde SGApp"
+      GroupDescription: "HardTech VM datos - DB solo desde SGApp"
       VpcId: !Ref VpcId
       SecurityGroupIngress:
         - Description: "PostgreSQL desde VMs app"
