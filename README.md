@@ -471,6 +471,11 @@ y el Load Balancer opcional no son creados automáticamente por este repositorio
 La secuencia, roles IAM, variables, diferencias con LocalStack, evidencias y
 limpieza están en [Despliegue AWS del MVP](docs/AWS_DEPLOYMENT.md).
 
+El frontend React se publica mediante un stack CloudFormation separado para
+AWS Amplify Hosting. La plantilla conecta el repositorio público, compila
+`frontend/`, configura el endpoint de API Gateway y añade el fallback para las
+rutas SPA. Consulte la [guía de Amplify](infrastructure/amplify/README.md).
+
 ```bash
 ./scripts/demo-aws.sh <bucket> <url-analytics> us-east-1
 ```
@@ -517,7 +522,9 @@ Las credenciales y secretos incluidos son exclusivamente locales. Para cualquier
 │   ├── mongodb/init/01-users.js         # Colección, índices, usuarios y semilla
 │   ├── localstack/init/01-bootstrap.sh # Bucket S3 local
 │   ├── glue/                           # CloudFormation y scripts de Glue
-│   └── athena/                         # Workgroup, permisos y consultas SQL
+│   ├── athena/                         # Workgroup, permisos y consultas SQL
+│   └── amplify/                        # CloudFormation del frontend en Amplify
+├── frontend/                           # Aplicación web React y TypeScript
 ├── ingestion/                          # Navegación y extractores batch a Parquet
 │   ├── navigation_ingestor.py
 │   ├── catalog_ingestor.py

@@ -443,6 +443,26 @@ Resources:
             ContentType: "application/json"
             MessageBody: '{"detail":"route not found"}'
 
+  # API Gateway agrega los encabezados CORS configurados arriba, pero la
+  # integración HTTP_PROXY conserva el estado que devuelve el backend. Esta
+  # regla evita que los frameworks respondan 405 al preflight del navegador.
+  RuleCorsPreflight:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref ALBListener
+      Priority: 1
+      Conditions:
+        - Field: http-request-method
+          HttpRequestMethodConfig:
+            Values: [OPTIONS]
+        - Field: path-pattern
+          PathPatternConfig:
+            Values: ["/api/*"]
+      Actions:
+        - Type: fixed-response
+          FixedResponseConfig:
+            StatusCode: "204"
+
   # ── Reglas ALB: APIs ──────────────────────────────────────────────────────
 
   RuleIdentity:

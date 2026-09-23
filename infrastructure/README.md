@@ -20,6 +20,8 @@ PostgreSQL, MySQL y MongoDB también son las fuentes de los extractores batch qu
 - `localstack/init/01-bootstrap.sh`: crea el bucket S3
 - `glue/`: plantilla CloudFormation y scripts para el Data Catalog en AWS
 - `athena/`: workgroup, política IAM, runner y consultas analíticas versionadas
+- `amplify/`: stack CloudFormation para compilar y publicar el frontend React
+  desde GitHub mediante AWS Amplify Hosting
 - `.env.example`: variables base sugeridas para los microservicios
 
 ## Requisitos
@@ -77,3 +79,6 @@ Para conocer los límites de cada almacén y los flujos de datos, consulte la [d
 LocalStack se usa únicamente para S3 durante el desarrollo, pero no valida Glue. La Fase 4 debe desplegarse en la cuenta AWS del curso siguiendo la [guía de Glue](glue/README.md).
 
 Athena tampoco se emula en el entorno local. Después de poblar Glue, continúe con la [guía de Athena](athena/README.md).
+
+El frontend se despliega como un stack separado siguiendo la
+[guía de AWS Amplify](amplify/README.md).
