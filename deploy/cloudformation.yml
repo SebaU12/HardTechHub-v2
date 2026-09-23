@@ -140,11 +140,11 @@ Resources:
           FromPort: 8001
           ToPort: 8005
           SourceSecurityGroupId: !Ref SGALB
-        - Description: "SSH desde VPC"
+        - Description: "SSH admin"
           IpProtocol: tcp
           FromPort: 22
           ToPort: 22
-          CidrIp: !Ref VpcCidr
+          CidrIp: "0.0.0.0/0"
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-sg-app"
@@ -198,23 +198,23 @@ Resources:
         Fn::Base64: !Sub |
           #!/bin/bash
           set -e
-          yum update -y
-          yum install -y docker git
+          apt-get update -y
+          apt-get install -y docker.io git curl
           systemctl start docker
           systemctl enable docker
-          usermod -aG docker ec2-user
+          usermod -aG docker ubuntu
           mkdir -p /usr/local/lib/docker/cli-plugins
           curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \
             -o /usr/local/lib/docker/cli-plugins/docker-compose
           chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
           ln -sf /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/bin/docker-compose
-          git clone https://github.com/SebaU12/HardTechHub-v2.git /home/ec2-user/app
-          chown -R ec2-user:ec2-user /home/ec2-user/app
+          git clone https://github.com/SebaU12/HardTechHub-v2.git /home/ubuntu/app
+          chown -R ubuntu:ubuntu /home/ubuntu/app
           TOKEN=$(curl -sX PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
           INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id || hostname)
-          echo "INSTANCE_ID=$INSTANCE_ID" >> /home/ec2-user/app/deploy/.env.app
-          echo "AWS_DEFAULT_REGION=${AWS::Region}" >> /home/ec2-user/app/deploy/.env.app
-          echo "S3_BUCKET=${DataLakeBucketName}" >> /home/ec2-user/app/deploy/.env.app
+          echo "INSTANCE_ID=$INSTANCE_ID" >> /home/ubuntu/app/deploy/.env.app
+          echo "AWS_DEFAULT_REGION=${AWS::Region}" >> /home/ubuntu/app/deploy/.env.app
+          echo "S3_BUCKET=${DataLakeBucketName}" >> /home/ubuntu/app/deploy/.env.app
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-app-1"
@@ -234,23 +234,23 @@ Resources:
         Fn::Base64: !Sub |
           #!/bin/bash
           set -e
-          yum update -y
-          yum install -y docker git
+          apt-get update -y
+          apt-get install -y docker.io git curl
           systemctl start docker
           systemctl enable docker
-          usermod -aG docker ec2-user
+          usermod -aG docker ubuntu
           mkdir -p /usr/local/lib/docker/cli-plugins
           curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \
             -o /usr/local/lib/docker/cli-plugins/docker-compose
           chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
           ln -sf /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/bin/docker-compose
-          git clone https://github.com/SebaU12/HardTechHub-v2.git /home/ec2-user/app
-          chown -R ec2-user:ec2-user /home/ec2-user/app
+          git clone https://github.com/SebaU12/HardTechHub-v2.git /home/ubuntu/app
+          chown -R ubuntu:ubuntu /home/ubuntu/app
           TOKEN=$(curl -sX PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
           INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id || hostname)
-          echo "INSTANCE_ID=$INSTANCE_ID" >> /home/ec2-user/app/deploy/.env.app
-          echo "AWS_DEFAULT_REGION=${AWS::Region}" >> /home/ec2-user/app/deploy/.env.app
-          echo "S3_BUCKET=${DataLakeBucketName}" >> /home/ec2-user/app/deploy/.env.app
+          echo "INSTANCE_ID=$INSTANCE_ID" >> /home/ubuntu/app/deploy/.env.app
+          echo "AWS_DEFAULT_REGION=${AWS::Region}" >> /home/ubuntu/app/deploy/.env.app
+          echo "S3_BUCKET=${DataLakeBucketName}" >> /home/ubuntu/app/deploy/.env.app
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-app-2"
@@ -272,19 +272,18 @@ Resources:
         Fn::Base64: |
           #!/bin/bash
           set -e
-          yum update -y
-          yum install -y docker git
+          apt-get update -y
+          apt-get install -y docker.io git curl
           systemctl start docker
           systemctl enable docker
-          usermod -aG docker ec2-user
+          usermod -aG docker ubuntu
           mkdir -p /usr/local/lib/docker/cli-plugins
           curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \
             -o /usr/local/lib/docker/cli-plugins/docker-compose
           chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
           ln -sf /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/bin/docker-compose
-          # Clonar repositorio del proyecto
-          git clone https://github.com/SebaU12/HardTechHub-v2.git /home/ec2-user/app
-          chown -R ec2-user:ec2-user /home/ec2-user/app
+          git clone https://github.com/SebaU12/HardTechHub-v2.git /home/ubuntu/app
+          chown -R ubuntu:ubuntu /home/ubuntu/app
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-data"

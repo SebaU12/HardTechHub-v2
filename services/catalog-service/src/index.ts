@@ -1,5 +1,4 @@
 import os from "os";
-import os from "os";
 import Fastify from "fastify";
 import swagger from "@fastify/swagger";
 import swaggerUi from "@fastify/swagger-ui";
@@ -32,7 +31,6 @@ app.get(
             service: { type: "string" },
             status: { type: "string" },
             version: { type: "string" },
-            instance: { type: "string" },
             instance: { type: "string" },
           },
         },
