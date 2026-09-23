@@ -64,7 +64,7 @@ run_query() {
     --region "$AWS_REGION" \
     --max-results 20 \
     --query 'ResultSet.Rows[*].Data[*].VarCharValue' \
-    --output table
+    --output json
 }
 
 found=0
