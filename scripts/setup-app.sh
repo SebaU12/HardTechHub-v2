@@ -6,6 +6,9 @@
 set -e
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+DEPLOY_DIR="$REPO_DIR/deploy"
+COMPOSE_FILE="$DEPLOY_DIR/compose.app.yml"
+ENV_FILE="$DEPLOY_DIR/.env.app"
 cd "$REPO_DIR"
 
 DB_HOST="${1:?ERROR: falta DB_HOST. Uso: $0 <DB_HOST> <API_BASE_URL>}"
@@ -18,8 +21,8 @@ INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
   http://169.254.169.254/latest/meta-data/instance-id 2>/dev/null || hostname)
 echo "    INSTANCE_ID=$INSTANCE_ID"
 
-echo "==> [2/5] Creando .env.app en $REPO_DIR..."
-cat > "$REPO_DIR/.env.app" <<EOF
+echo "==> [2/5] Creando .env.app en $DEPLOY_DIR..."
+cat > "$ENV_FILE" <<EOF
 DB_HOST=$DB_HOST
 POSTGRES_USER=hardtech
 POSTGRES_PASSWORD=Hardtech2026!
@@ -53,11 +56,11 @@ APP_SERVICES=(identity-service catalog-service order-service compatibility-servi
 for svc in "${APP_SERVICES[@]}"; do
   echo ""
   echo "--- build: $svc ---"
-  docker compose -f deploy/compose.app.yml build --no-cache "$svc"
+  docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" build --no-cache "$svc"
 done
 
 echo "==> [5/5] Iniciando todos los servicios..."
-docker compose -f deploy/compose.app.yml up -d --no-deps \
+docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --no-deps \
   identity-service catalog-service order-service compatibility-service analytics-service \
   ingestor catalog-ingestor orders-ingestor identity-ingestor
 
@@ -65,7 +68,7 @@ echo ""
 echo "Esperando 30s para que arranquen los health checks..."
 sleep 30
 
-docker compose -f deploy/compose.app.yml ps
+docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" ps
 
 echo ""
 echo "=== Setup de App VM completado ==="

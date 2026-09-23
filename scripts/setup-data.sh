@@ -6,10 +6,13 @@
 set -e
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+DEPLOY_DIR="$REPO_DIR/deploy"
+COMPOSE_FILE="$DEPLOY_DIR/compose.data.yml"
+ENV_FILE="$DEPLOY_DIR/.env.data"
 cd "$REPO_DIR"
 
-echo "==> [1/3] Creando .env.data en $REPO_DIR..."
-cat > "$REPO_DIR/.env.data" <<'EOF'
+echo "==> [1/3] Creando .env.data en $DEPLOY_DIR..."
+cat > "$ENV_FILE" <<'EOF'
 POSTGRES_USER=hardtech
 POSTGRES_PASSWORD=Hardtech2026!
 MYSQL_USER=hardtech
@@ -20,12 +23,12 @@ EOF
 echo "    .env.data creado."
 
 echo "==> [2/3] Iniciando bases de datos..."
-docker compose -f deploy/compose.data.yml up -d
+docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d
 
 echo "==> [3/3] Esperando 60s para que las BDs inicialicen y ejecuten los scripts de init..."
 sleep 60
 
-docker compose -f deploy/compose.data.yml ps
+docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" ps
 
 echo ""
 echo "=== Setup de Data VM completado ==="
