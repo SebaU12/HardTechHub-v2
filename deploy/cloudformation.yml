@@ -84,6 +84,17 @@ Parameters:
     Default: hardtech-events-crawler
     Description: "Nombre del crawler de Glue para eventos JSON"
 
+  # AWS Academy no permite crear roles IAM — usar los existentes del lab
+  LabRoleArn:
+    Type: String
+    Default: "arn:aws:iam::560123116988:role/LabRole"
+    Description: "ARN del LabRole existente en AWS Academy (ver IAM > Roles > LabRole)"
+
+  LabInstanceProfileName:
+    Type: String
+    Default: "LabInstanceProfile"
+    Description: "Nombre del Instance Profile existente en AWS Academy"
+
 # ---------------------------------------------------------------------------
 # Resources
 # ---------------------------------------------------------------------------
@@ -169,35 +180,8 @@ Resources:
         - Key: Name
           Value: !Sub "${ProjectName}-sg-data"
 
-  # ── Rol IAM para instancias de aplicación ─────────────────────────────────
-  AppInstanceRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub "${ProjectName}-app-ec2-role"
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: ec2.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/AmazonS3FullAccess
-        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
-        - !Ref AthenaQueryPolicy
-      Tags:
-        - Key: Name
-          Value: !Sub "${ProjectName}-app-ec2-role"
-
-  AppInstanceProfile:
-    Type: AWS::IAM::InstanceProfile
-    Properties:
-      InstanceProfileName: !Sub "${ProjectName}-app-ec2-profile"
-      Roles:
-        - !Ref AppInstanceRole
-
-  # ── Parámetro: repo Git del proyecto ─────────────────────────────────────
-  # (se usa en UserData para clonar automáticamente al arrancar las EC2)
+  # ── Nota: AWS Academy no permite crear IAM Roles/Profiles.
+  # Se usa LabRole y LabInstanceProfile preexistentes (parametrizados arriba).
 
   # ── EC2: VM de aplicación 1 ───────────────────────────────────────────────
   AppInstance1:
@@ -209,7 +193,7 @@ Resources:
       SubnetId: !Ref AppSubnet1Id
       SecurityGroupIds:
         - !Ref SGApp
-      IamInstanceProfile: !Ref AppInstanceProfile
+      IamInstanceProfile: !Ref LabInstanceProfileName
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
@@ -224,10 +208,8 @@ Resources:
             -o /usr/local/lib/docker/cli-plugins/docker-compose
           chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
           ln -sf /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/bin/docker-compose
-          # Clonar repositorio del proyecto
           git clone https://github.com/SebaU12/HardTechHub-v2.git /home/ec2-user/app
           chown -R ec2-user:ec2-user /home/ec2-user/app
-          # Obtener INSTANCE_ID via IMDSv2
           TOKEN=$(curl -sX PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
           INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id || hostname)
           echo "INSTANCE_ID=$INSTANCE_ID" >> /home/ec2-user/app/deploy/.env.app
@@ -237,7 +219,7 @@ Resources:
         - Key: Name
           Value: !Sub "${ProjectName}-app-1"
 
-  # ── EC2: VM de aplicación 2 ───────────────────────────────────────────────
+  # ── EC2: VM de aplicacion 2 ───────────────────────────────────────────────
   AppInstance2:
     Type: AWS::EC2::Instance
     Properties:
@@ -247,7 +229,7 @@ Resources:
       SubnetId: !Ref AppSubnet2Id
       SecurityGroupIds:
         - !Ref SGApp
-      IamInstanceProfile: !Ref AppInstanceProfile
+      IamInstanceProfile: !Ref LabInstanceProfileName
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
@@ -262,10 +244,8 @@ Resources:
             -o /usr/local/lib/docker/cli-plugins/docker-compose
           chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
           ln -sf /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/bin/docker-compose
-          # Clonar repositorio del proyecto
           git clone https://github.com/SebaU12/HardTechHub-v2.git /home/ec2-user/app
           chown -R ec2-user:ec2-user /home/ec2-user/app
-          # Obtener INSTANCE_ID via IMDSv2
           TOKEN=$(curl -sX PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
           INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id || hostname)
           echo "INSTANCE_ID=$INSTANCE_ID" >> /home/ec2-user/app/deploy/.env.app
@@ -674,44 +654,6 @@ Resources:
         - Key: phase
           Value: analytics
 
-  # ── IAM Role para Glue Crawlers ──────────────────────────────────────────
-  GlueCrawlerRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub "${ProjectName}-glue-crawler-role"
-      Description: "Acceso de lectura al data lake usado por los crawlers de Glue."
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: glue.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
-      Policies:
-        - PolicyName: ReadHardTechDataLake
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Sid: ListAnalyticalPrefixes
-                Effect: Allow
-                Action: s3:ListBucket
-                Resource: !Sub "arn:${AWS::Partition}:s3:::${DataLakeBucketName}"
-                Condition:
-                  StringLike:
-                    s3:prefix:
-                      - "processed/snapshots/*"
-                      - "raw/events/*"
-              - Sid: ReadAnalyticalObjects
-                Effect: Allow
-                Action:
-                  - s3:GetObject
-                  - s3:GetObjectVersion
-                Resource:
-                  - !Sub "arn:${AWS::Partition}:s3:::${DataLakeBucketName}/processed/snapshots/*"
-                  - !Sub "arn:${AWS::Partition}:s3:::${DataLakeBucketName}/raw/events/*"
-
   # ── Glue Database ────────────────────────────────────────────────────────
   GlueDatabase:
     Type: AWS::Glue::Database
@@ -1043,7 +985,7 @@ Resources:
     Properties:
       Name: !Ref SnapshotsCrawlerName
       Description: "Actualiza esquemas y particiones de fecha para snapshots Parquet."
-      Role: !GetAtt GlueCrawlerRole.Arn
+      Role: !Ref LabRoleArn
       DatabaseName: !Ref GlueDatabaseName
       Targets:
         CatalogTargets:
@@ -1071,7 +1013,7 @@ Resources:
     Properties:
       Name: !Ref EventsCrawlerName
       Description: "Actualiza esquemas y particiones de fecha para eventos JSON."
-      Role: !GetAtt GlueCrawlerRole.Arn
+      Role: !Ref LabRoleArn
       DatabaseName: !Ref GlueDatabaseName
       Targets:
         CatalogTargets:
@@ -1112,72 +1054,6 @@ Resources:
           Value: hardtech-hub
         - Key: phase
           Value: analytics
-
-  # ── IAM Managed Policy: Athena con privilegio mínimo ────────────────────
-  AthenaQueryPolicy:
-    Type: AWS::IAM::ManagedPolicy
-    Properties:
-      Description: "Ejecutar queries de HardTech en Athena y acceder solo al catálogo y paths S3 del proyecto."
-      PolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Sid: UseHardTechWorkGroup
-            Effect: Allow
-            Action:
-              - athena:StartQueryExecution
-              - athena:StopQueryExecution
-              - athena:GetQueryExecution
-              - athena:GetQueryResults
-              - athena:GetQueryResultsStream
-              - athena:GetWorkGroup
-              - athena:ListQueryExecutions
-            Resource: !Sub "arn:${AWS::Partition}:athena:${AWS::Region}:${AWS::AccountId}:workgroup/${AthenaWorkGroupName}"
-          - Sid: ReadHardTechCatalog
-            Effect: Allow
-            Action:
-              - glue:GetDatabase
-              - glue:GetDatabases
-              - glue:GetTable
-              - glue:GetTables
-              - glue:GetPartition
-              - glue:GetPartitions
-              - glue:BatchGetPartition
-            Resource:
-              - !Sub "arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:catalog"
-              - !Sub "arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:database/${GlueDatabaseName}"
-              - !Sub "arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:table/${GlueDatabaseName}/*"
-          - Sid: InspectDataLakeBucket
-            Effect: Allow
-            Action:
-              - s3:GetBucketLocation
-              - s3:ListBucketMultipartUploads
-            Resource: !Sub "arn:${AWS::Partition}:s3:::${DataLakeBucketName}"
-          - Sid: ListAnalyticalPrefixes
-            Effect: Allow
-            Action: s3:ListBucket
-            Resource: !Sub "arn:${AWS::Partition}:s3:::${DataLakeBucketName}"
-            Condition:
-              StringLike:
-                s3:prefix:
-                  - "raw/events/*"
-                  - "processed/snapshots/*"
-                  - "athena-results/*"
-          - Sid: ReadAnalyticalData
-            Effect: Allow
-            Action:
-              - s3:GetObject
-              - s3:GetObjectVersion
-            Resource:
-              - !Sub "arn:${AWS::Partition}:s3:::${DataLakeBucketName}/raw/events/*"
-              - !Sub "arn:${AWS::Partition}:s3:::${DataLakeBucketName}/processed/snapshots/*"
-          - Sid: ManageQueryResults
-            Effect: Allow
-            Action:
-              - s3:GetObject
-              - s3:PutObject
-              - s3:AbortMultipartUpload
-              - s3:ListMultipartUploadParts
-            Resource: !Sub "arn:${AWS::Partition}:s3:::${DataLakeBucketName}/athena-results/*"
 
 # ---------------------------------------------------------------------------
 # Outputs
@@ -1275,8 +1151,8 @@ Outputs:
       Name: !Sub "${ProjectName}-glue-db"
 
   GlueCrawlerRoleArn:
-    Description: "ARN del rol IAM de los Glue crawlers"
-    Value: !GetAtt GlueCrawlerRole.Arn
+    Description: "ARN del LabRole usado por los Glue crawlers"
+    Value: !Ref LabRoleArn
 
   SnapshotsCrawlerNameOut:
     Description: "Nombre del crawler de snapshots Parquet"
@@ -1296,6 +1172,6 @@ Outputs:
     Description: "Ubicación S3 de resultados de Athena"
     Value: !Sub "s3://${DataLakeBucketName}/athena-results/"
 
-  AthenaQueryPolicyArn:
-    Description: "ARN de la managed policy de Athena — adjuntar a roles adicionales si hace falta"
-    Value: !Ref AthenaQueryPolicy
+  AthenaQueryNote:
+    Description: "Athena permissions provided by LabRole (AWS Academy). No custom policy needed."
+    Value: !Ref LabRoleArn
