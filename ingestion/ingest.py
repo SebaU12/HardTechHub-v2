@@ -7,9 +7,10 @@ import time
 import uuid
 from datetime import datetime, timezone
 
-import boto3
 import pandas as pd
 from botocore.exceptions import BotoCoreError, ClientError
+
+from common.s3_writer import get_s3_client
 
 logging.basicConfig(
     level=logging.INFO,
@@ -18,7 +19,6 @@ logging.basicConfig(
 )
 log = logging.getLogger("ingestor")
 
-S3_ENDPOINT = os.getenv("S3_ENDPOINT_URL", "http://localstack:4566")
 S3_BUCKET = os.getenv("S3_BUCKET", "hardtech-datalake")
 S3_EVENTS_PREFIX = os.getenv("S3_EVENTS_PREFIX", "raw/events/navigation/").strip("/")
 S3_PROCESSED_PREFIX = os.getenv(
@@ -84,16 +84,13 @@ def upload_processed(s3, events: list[dict], now: datetime) -> None:
 
 
 def main() -> None:
+    endpoint = os.getenv("S3_ENDPOINT_URL") or "AWS"
     log.info("Starting ingestor | bucket=%s endpoint=%s batch=%d interval=%ds",
-             S3_BUCKET, S3_ENDPOINT, BATCH_SIZE, INTERVAL_SECONDS)
+             S3_BUCKET, endpoint, BATCH_SIZE, INTERVAL_SECONDS)
 
-    s3 = boto3.client(
-        "s3",
-        endpoint_url=S3_ENDPOINT,
-        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID", "test"),
-        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY", "test"),
-        region_name=os.getenv("AWS_DEFAULT_REGION", "us-east-1"),
-    )
+    # Local Compose defines S3_ENDPOINT_URL and test credentials for LocalStack.
+    # In AWS those variables are absent, so boto3 uses the EC2 instance role.
+    s3 = get_s3_client()
 
     total = 0
     while True:
