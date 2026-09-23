@@ -41,7 +41,12 @@ read -r mysql_orders mysql_items mysql_orphans < <(
 )
 
 mongo_count=$(docker compose exec -T mongodb mongosh --quiet \
-  'mongodb://hardtech_reader:hardtech_reader@localhost:27017/hardtech_identity?authSource=hardtech_identity' \
+  --host localhost \
+  --port 27017 \
+  --username "${MONGO_READER_USER:-hardtech_reader}" \
+  --password "${MONGO_READER_PASSWORD:-hardtech_reader}" \
+  --authenticationDatabase hardtech_identity \
+  hardtech_identity \
   --eval 'db.users.countDocuments({user_id: {$regex: "^fake_seed_"}})')
 
 if (( postgres_count < MINIMUM_COUNT )); then

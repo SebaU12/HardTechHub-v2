@@ -27,6 +27,11 @@ docker compose exec -T \
   -e SEED_COUNT="$SEED_COUNT" \
   -e FORCE_SEED="$FORCE_SEED" \
   mongodb mongosh \
-  'mongodb://hardtech:hardtech@localhost:27017/hardtech_identity?authSource=hardtech_identity' \
+  --host localhost \
+  --port 27017 \
+  --username "${MONGO_APP_USER:-hardtech}" \
+  --password "${MONGO_APP_PASSWORD:-hardtech}" \
+  --authenticationDatabase hardtech_identity \
+  hardtech_identity \
   --quiet \
   --eval 'const loaded = load("/dev/stdin");' < "$SCRIPT_DIR/seed-mongodb-20k.js"

@@ -1,17 +1,31 @@
 const identityDb = db.getSiblingDB("hardtech_identity");
+const appUser = process.env.MONGO_APP_USER || "hardtech";
+const appPassword = process.env.MONGO_APP_PASSWORD || "hardtech";
+const readerUser = process.env.MONGO_READER_USER || "hardtech_reader";
+const readerPassword = process.env.MONGO_READER_PASSWORD || "hardtech_reader";
 
-if (!identityDb.getUser("hardtech")) {
+if (!identityDb.getUser(appUser)) {
   identityDb.createUser({
-    user: "hardtech",
-    pwd: "hardtech",
+    user: appUser,
+    pwd: appPassword,
+    roles: [{ role: "readWrite", db: "hardtech_identity" }],
+  });
+} else {
+  identityDb.updateUser(appUser, {
+    pwd: appPassword,
     roles: [{ role: "readWrite", db: "hardtech_identity" }],
   });
 }
 
-if (!identityDb.getUser("hardtech_reader")) {
+if (!identityDb.getUser(readerUser)) {
   identityDb.createUser({
-    user: "hardtech_reader",
-    pwd: "hardtech_reader",
+    user: readerUser,
+    pwd: readerPassword,
+    roles: [{ role: "read", db: "hardtech_identity" }],
+  });
+} else {
+  identityDb.updateUser(readerUser, {
+    pwd: readerPassword,
     roles: [{ role: "read", db: "hardtech_identity" }],
   });
 }

@@ -16,11 +16,23 @@ Parameters:
     AllowedValues: [t2.micro, t2.small, t3.micro, t3.small, t3.medium]
     Description: "Tipo de instancia para las VMs de aplicación"
 
+  AppRootVolumeSize:
+    Type: Number
+    Default: 40
+    MinValue: 30
+    Description: "Tamaño en GiB del volumen raíz gp3 de cada VM de aplicación"
+
   DataInstanceType:
     Type: String
     Default: t3.medium
     AllowedValues: [t2.small, t2.medium, t3.small, t3.medium, t3.large]
     Description: "Tipo de instancia para la VM de datos"
+
+  DataRootVolumeSize:
+    Type: Number
+    Default: 40
+    MinValue: 30
+    Description: "Tamaño en GiB del volumen raíz gp3 de la VM de datos"
 
   KeyName:
     Type: AWS::EC2::KeyPair::KeyName
@@ -290,6 +302,13 @@ Resources:
       ImageId: !Ref AMI
       InstanceType: !Ref AppInstanceType
       KeyName: !Ref KeyName
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: !Ref AppRootVolumeSize
+            VolumeType: gp3
+            Encrypted: true
+            DeleteOnTermination: true
       SubnetId: !Ref PrivateSubnet1
       SecurityGroupIds:
         - !Ref SGApp
@@ -314,6 +333,13 @@ Resources:
       ImageId: !Ref AMI
       InstanceType: !Ref AppInstanceType
       KeyName: !Ref KeyName
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: !Ref AppRootVolumeSize
+            VolumeType: gp3
+            Encrypted: true
+            DeleteOnTermination: true
       SubnetId: !Ref PrivateSubnet2
       SecurityGroupIds:
         - !Ref SGApp
@@ -338,6 +364,13 @@ Resources:
       ImageId: !Ref AMI
       InstanceType: !Ref DataInstanceType
       KeyName: !Ref KeyName
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: !Ref DataRootVolumeSize
+            VolumeType: gp3
+            Encrypted: true
+            DeleteOnTermination: true
       SubnetId: !Ref PrivateSubnetData
       SecurityGroupIds:
         - !Ref SGData

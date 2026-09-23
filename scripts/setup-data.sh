@@ -15,10 +15,18 @@ echo "==> [1/3] Creando .env.data en $DEPLOY_DIR..."
 cat > "$ENV_FILE" <<'EOF'
 POSTGRES_USER=hardtech
 POSTGRES_PASSWORD=Hardtech2026!
+POSTGRES_READER_USER=hardtech_reader
+POSTGRES_READER_PASSWORD=HardtechReader2026!
 MYSQL_USER=hardtech
 MYSQL_PASSWORD=Hardtech2026!
 MYSQL_ROOT_PASSWORD=HardtechRoot2026!
+MYSQL_READER_USER=hardtech_reader
+MYSQL_READER_PASSWORD=HardtechReader2026!
 MONGO_ROOT_PASSWORD=HardtechRoot2026!
+MONGO_APP_USER=hardtech
+MONGO_APP_PASSWORD=Hardtech2026!
+MONGO_READER_USER=hardtech_reader
+MONGO_READER_PASSWORD=HardtechReader2026!
 EOF
 echo "    .env.data creado."
 
