@@ -1,0 +1,665 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "HardTech Hub — VPC, Security Groups, EC2 (App x2 + Data), ALB interno y Target Groups"
+
+# ---------------------------------------------------------------------------
+# Parameters
+# ---------------------------------------------------------------------------
+Parameters:
+  AMI:
+    Type: String
+    Default: "ami-0b33d2f1547e52c78"
+    Description: "ID de AMI (Amazon Linux 2023)"
+
+  AppInstanceType:
+    Type: String
+    Default: t3.small
+    AllowedValues: [t2.micro, t2.small, t3.micro, t3.small, t3.medium]
+    Description: "Tipo de instancia para las VMs de aplicación"
+
+  DataInstanceType:
+    Type: String
+    Default: t3.medium
+    AllowedValues: [t2.small, t2.medium, t3.small, t3.medium, t3.large]
+    Description: "Tipo de instancia para la VM de datos"
+
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: "Par de claves SSH para acceso de administración"
+
+  ProjectName:
+    Type: String
+    Default: hardtech
+    Description: "Prefijo para nombrar todos los recursos"
+
+# ---------------------------------------------------------------------------
+# Resources
+# ---------------------------------------------------------------------------
+Resources:
+
+  # ── VPC ──────────────────────────────────────────────────────────────────
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-vpc"
+
+  # ── Subredes ─────────────────────────────────────────────────────────────
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-public-1"
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-public-2"
+
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.10.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-private-app-1"
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.11.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-private-app-2"
+
+  PrivateSubnetData:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.20.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-private-data"
+
+  # ── Internet Gateway ──────────────────────────────────────────────────────
+  IGW:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-igw"
+
+  IGWAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref IGW
+
+  # ── NAT Gateway (salida a Internet desde subredes privadas) ───────────────
+  EIP:
+    Type: AWS::EC2::EIP
+    DependsOn: IGWAttachment
+    Properties:
+      Domain: vpc
+
+  NATGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt EIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-nat"
+
+  # ── Tablas de rutas ───────────────────────────────────────────────────────
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-rt-public"
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: IGWAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: "0.0.0.0/0"
+      GatewayId: !Ref IGW
+
+  PublicSubnet1Assoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2Assoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-rt-private"
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: "0.0.0.0/0"
+      NatGatewayId: !Ref NATGateway
+
+  PrivateSubnet1Assoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnet2Assoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnetDataAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetData
+      RouteTableId: !Ref PrivateRouteTable
+
+  # ── Security Groups ───────────────────────────────────────────────────────
+
+  # ALB interno: acepta tráfico HTTP desde toda la VPC (VPC Link lo invocará)
+  SGALB:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "ALB interno — HTTP desde VPC"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 10.0.0.0/16
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-sg-alb"
+
+  # VMs de aplicación: puertos de los cinco servicios desde ALB; SSH para admin
+  SGApp:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "VMs de aplicación — servicios desde ALB y SSH"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8001
+          ToPort: 8005
+          SourceSecurityGroupId: !Ref SGALB
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 10.0.0.0/16
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-sg-app"
+
+  # VM de datos: puertos de base de datos solo desde VMs de aplicación
+  SGData:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "VM de datos — puertos DB solo desde SGApp"
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref SGApp
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref SGApp
+        - IpProtocol: tcp
+          FromPort: 27017
+          ToPort: 27017
+          SourceSecurityGroupId: !Ref SGApp
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 10.0.0.0/16
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-sg-data"
+
+  # ── Rol IAM para instancias de aplicación ─────────────────────────────────
+  AppInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-app-ec2-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+        - arn:aws:iam::aws:policy/AmazonAthenaFullAccess
+        - arn:aws:iam::aws:policy/AWSGlueConsoleFullAccess
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-app-ec2-role"
+
+  AppInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub "${ProjectName}-app-ec2-profile"
+      Roles:
+        - !Ref AppInstanceRole
+
+  # ── EC2: VM de aplicación 1 ───────────────────────────────────────────────
+  AppInstance1:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref AMI
+      InstanceType: !Ref AppInstanceType
+      KeyName: !Ref KeyName
+      SubnetId: !Ref PrivateSubnet1
+      SecurityGroupIds:
+        - !Ref SGApp
+      IamInstanceProfile: !Ref AppInstanceProfile
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -e
+          systemctl start docker
+          systemctl enable docker
+          echo "APP_INSTANCE_1_READY=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /etc/environment
+          echo "Instancia de aplicación 1 lista. Clonar repo y ejecutar setup-app-ec2.sh" \
+            > /home/ubuntu/SETUP_PENDING.txt
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-app-1"
+
+  # ── EC2: VM de aplicación 2 ───────────────────────────────────────────────
+  AppInstance2:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref AMI
+      InstanceType: !Ref AppInstanceType
+      KeyName: !Ref KeyName
+      SubnetId: !Ref PrivateSubnet2
+      SecurityGroupIds:
+        - !Ref SGApp
+      IamInstanceProfile: !Ref AppInstanceProfile
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -e
+          systemctl start docker
+          systemctl enable docker
+          echo "APP_INSTANCE_2_READY=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /etc/environment
+          echo "Instancia de aplicación 2 lista. Clonar repo y ejecutar setup-app-ec2.sh" \
+            > /home/ubuntu/SETUP_PENDING.txt
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-app-2"
+
+  # ── EC2: VM de datos ──────────────────────────────────────────────────────
+  DataInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref AMI
+      InstanceType: !Ref DataInstanceType
+      KeyName: !Ref KeyName
+      SubnetId: !Ref PrivateSubnetData
+      SecurityGroupIds:
+        - !Ref SGData
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -e
+          systemctl start docker
+          systemctl enable docker
+          echo "DATA_INSTANCE_READY=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /etc/environment
+          echo "VM de datos lista. Clonar repo, crear .env.data y ejecutar: docker compose -f deploy/compose.data.yml up -d" \
+            > /home/ubuntu/SETUP_PENDING.txt
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-data"
+
+  # ── ALB interno ───────────────────────────────────────────────────────────
+  ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${ProjectName}-alb"
+      Scheme: internal
+      Type: application
+      Subnets:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+      SecurityGroups:
+        - !Ref SGALB
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-alb"
+
+  # ── Target Groups (uno por servicio) ──────────────────────────────────────
+  TGIdentity:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${ProjectName}-tg-identity"
+      Protocol: HTTP
+      Port: 8001
+      VpcId: !Ref VPC
+      TargetType: instance
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Targets:
+        - Id: !Ref AppInstance1
+          Port: 8001
+        - Id: !Ref AppInstance2
+          Port: 8001
+
+  TGCatalog:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${ProjectName}-tg-catalog"
+      Protocol: HTTP
+      Port: 8002
+      VpcId: !Ref VPC
+      TargetType: instance
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Targets:
+        - Id: !Ref AppInstance1
+          Port: 8002
+        - Id: !Ref AppInstance2
+          Port: 8002
+
+  TGOrders:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${ProjectName}-tg-orders"
+      Protocol: HTTP
+      Port: 8003
+      VpcId: !Ref VPC
+      TargetType: instance
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Targets:
+        - Id: !Ref AppInstance1
+          Port: 8003
+        - Id: !Ref AppInstance2
+          Port: 8003
+
+  TGCompatibility:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${ProjectName}-tg-compatibility"
+      Protocol: HTTP
+      Port: 8004
+      VpcId: !Ref VPC
+      TargetType: instance
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Targets:
+        - Id: !Ref AppInstance1
+          Port: 8004
+        - Id: !Ref AppInstance2
+          Port: 8004
+
+  TGAnalytics:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${ProjectName}-tg-analytics"
+      Protocol: HTTP
+      Port: 8005
+      VpcId: !Ref VPC
+      TargetType: instance
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Targets:
+        - Id: !Ref AppInstance1
+          Port: 8005
+        - Id: !Ref AppInstance2
+          Port: 8005
+
+  # ── Listener ALB (puerto 80) ──────────────────────────────────────────────
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ALB
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - Type: fixed-response
+          FixedResponseConfig:
+            StatusCode: "404"
+            ContentType: "application/json"
+            MessageBody: '{"detail":"route not found"}'
+
+  # ── Reglas de enrutamiento por ruta ──────────────────────────────────────
+  RuleIdentity:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref ALBListener
+      Priority: 10
+      Conditions:
+        - Field: path-pattern
+          Values: ["/api/auth*"]
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TGIdentity
+
+  RuleIdentityDocs:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref ALBListener
+      Priority: 11
+      Conditions:
+        - Field: path-pattern
+          Values: ["/identity/docs*", "/identity/openapi.json"]
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TGIdentity
+
+  RuleCatalog:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref ALBListener
+      Priority: 20
+      Conditions:
+        - Field: path-pattern
+          Values: ["/api/products*"]
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TGCatalog
+
+  RuleCatalogDocs:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref ALBListener
+      Priority: 21
+      Conditions:
+        - Field: path-pattern
+          Values: ["/catalog/docs*", "/catalog/openapi.json"]
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TGCatalog
+
+  RuleOrders:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref ALBListener
+      Priority: 30
+      Conditions:
+        - Field: path-pattern
+          Values: ["/api/orders*"]
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TGOrders
+
+  RuleOrdersDocs:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref ALBListener
+      Priority: 31
+      Conditions:
+        - Field: path-pattern
+          Values: ["/orders/docs*", "/orders/openapi.json"]
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TGOrders
+
+  RuleCompatibility:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref ALBListener
+      Priority: 40
+      Conditions:
+        - Field: path-pattern
+          Values: ["/api/compatibility*"]
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TGCompatibility
+
+  RuleCompatibilityDocs:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref ALBListener
+      Priority: 41
+      Conditions:
+        - Field: path-pattern
+          Values: ["/compatibility/docs*", "/compatibility/openapi.json"]
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TGCompatibility
+
+  RuleAnalytics:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref ALBListener
+      Priority: 50
+      Conditions:
+        - Field: path-pattern
+          Values: ["/api/analytics*"]
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TGAnalytics
+
+  RuleAnalyticsDocs:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref ALBListener
+      Priority: 51
+      Conditions:
+        - Field: path-pattern
+          Values: ["/analytics/docs*", "/analytics/openapi.json"]
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TGAnalytics
+
+# ---------------------------------------------------------------------------
+# Outputs
+# ---------------------------------------------------------------------------
+Outputs:
+  VPCId:
+    Description: "ID de la VPC"
+    Value: !Ref VPC
+
+  PrivateSubnet1Id:
+    Description: "Subred privada 1 (AZ-a) — para VPC Link"
+    Value: !Ref PrivateSubnet1
+
+  PrivateSubnet2Id:
+    Description: "Subred privada 2 (AZ-b) — para VPC Link"
+    Value: !Ref PrivateSubnet2
+
+  SGALBId:
+    Description: "Security Group del ALB"
+    Value: !Ref SGALB
+
+  SGAppId:
+    Description: "Security Group de las VMs de aplicación"
+    Value: !Ref SGApp
+
+  SGDataId:
+    Description: "Security Group de la VM de datos"
+    Value: !Ref SGData
+
+  ALBArn:
+    Description: "ARN del ALB interno"
+    Value: !Ref ALB
+
+  ALBDNSName:
+    Description: "DNS del ALB interno (usar en VPC Link de API Gateway)"
+    Value: !GetAtt ALB.DNSName
+
+  App1PrivateIP:
+    Description: "IP privada de App 1"
+    Value: !GetAtt AppInstance1.PrivateIp
+
+  App2PrivateIP:
+    Description: "IP privada de App 2"
+    Value: !GetAtt AppInstance2.PrivateIp
+
+  DataPrivateIP:
+    Description: "IP privada de la VM de datos (usar como DB_HOST en .env.app)"
+    Value: !GetAtt DataInstance.PrivateIp
+
+  TGIdentityArn:
+    Description: "Target Group Identity"
+    Value: !Ref TGIdentity
+
+  TGCatalogArn:
+    Description: "Target Group Catalog"
+    Value: !Ref TGCatalog
+
+  TGOrdersArn:
+    Description: "Target Group Orders"
+    Value: !Ref TGOrders
+
+  TGCompatibilityArn:
+    Description: "Target Group Compatibility"
+    Value: !Ref TGCompatibility
+
+  TGAnalyticsArn:
+    Description: "Target Group Analytics"
+    Value: !Ref TGAnalytics

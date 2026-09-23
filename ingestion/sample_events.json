@@ -1,0 +1,56 @@
+[
+  {
+    "event_id": "evt_1001",
+    "event_type": "PRODUCT_VIEW",
+    "timestamp": "2026-09-04T10:00:00Z",
+    "source": "synthetic-ingestor",
+    "user_id": "usr_demo_001",
+    "session_id": "sess_1001",
+    "product_id": 1,
+    "order_id": null,
+    "payload": {
+      "category": "CPU"
+    }
+  },
+  {
+    "event_id": "evt_1002",
+    "event_type": "PRODUCT_VIEW",
+    "timestamp": "2026-09-04T10:02:00Z",
+    "source": "synthetic-ingestor",
+    "user_id": "usr_demo_001",
+    "session_id": "sess_1001",
+    "product_id": 1,
+    "order_id": null,
+    "payload": {
+      "category": "CPU"
+    }
+  },
+  {
+    "event_id": "evt_1003",
+    "event_type": "PRODUCT_SEARCH",
+    "timestamp": "2026-09-04T10:05:00Z",
+    "source": "synthetic-ingestor",
+    "user_id": "usr_demo_001",
+    "session_id": "sess_1001",
+    "product_id": null,
+    "order_id": null,
+    "payload": {
+      "category": "CPU"
+    }
+  },
+  {
+    "event_id": "evt_1004",
+    "event_type": "ORDER_CREATED",
+    "timestamp": "2026-09-04T10:08:00Z",
+    "source": "order-service",
+    "user_id": "usr_catalog_001",
+    "session_id": null,
+    "product_id": null,
+    "order_id": 1,
+    "payload": {
+      "status": "PENDING",
+      "total_amount": "1794.88",
+      "item_count": 1
+    }
+  }
+]

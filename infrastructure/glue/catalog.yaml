@@ -1,0 +1,429 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: HardTech Hub Glue Data Catalog, tables and partition crawlers.
+
+Parameters:
+  DataLakeBucket:
+    Type: String
+    Default: hardtech-datalake
+    Description: Existing S3 bucket that contains raw/events and processed/snapshots.
+  GlueDatabaseName:
+    Type: String
+    Default: hardtech_analytics
+    AllowedPattern: "[a-z0-9_]+"
+  SnapshotsCrawlerName:
+    Type: String
+    Default: hardtech-snapshots-crawler
+  EventsCrawlerName:
+    Type: String
+    Default: hardtech-events-crawler
+
+Resources:
+  GlueDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: !Ref GlueDatabaseName
+        Description: HardTech Hub analytical datasets stored in S3.
+
+  GlueCrawlerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: Read-only access used by HardTech Glue crawlers.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Policies:
+        - PolicyName: ReadHardTechDataLake
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ListAnalyticalPrefixes
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !Sub arn:${AWS::Partition}:s3:::${DataLakeBucket}
+                Condition:
+                  StringLike:
+                    s3:prefix:
+                      - processed/snapshots/*
+                      - raw/events/*
+              - Sid: ReadAnalyticalObjects
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                Resource:
+                  - !Sub arn:${AWS::Partition}:s3:::${DataLakeBucket}/processed/snapshots/*
+                  - !Sub arn:${AWS::Partition}:s3:::${DataLakeBucket}/raw/events/*
+
+  ProductsTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref GlueDatabase
+      TableInput:
+        Name: products
+        Description: Product snapshots extracted from PostgreSQL.
+        TableType: EXTERNAL_TABLE
+        Parameters:
+          EXTERNAL: "TRUE"
+          classification: parquet
+        PartitionKeys:
+          - Name: year
+            Type: string
+          - Name: month
+            Type: string
+          - Name: day
+            Type: string
+        StorageDescriptor:
+          Location: !Sub s3://${DataLakeBucket}/processed/snapshots/products/
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe
+          Columns:
+            - {Name: id, Type: bigint}
+            - {Name: sku, Type: string}
+            - {Name: name, Type: string}
+            - {Name: description, Type: string}
+            - {Name: price, Type: "decimal(10,2)"}
+            - {Name: specs, Type: string}
+            - {Name: image_url, Type: string}
+            - {Name: category, Type: string}
+            - {Name: brand, Type: string}
+            - {Name: is_active, Type: boolean}
+            - {Name: created_at, Type: timestamp}
+            - {Name: snapshot_at, Type: timestamp}
+
+  OrdersTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref GlueDatabase
+      TableInput:
+        Name: orders
+        Description: Order snapshots extracted from MySQL.
+        TableType: EXTERNAL_TABLE
+        Parameters: {EXTERNAL: "TRUE", classification: parquet}
+        PartitionKeys:
+          - {Name: year, Type: string}
+          - {Name: month, Type: string}
+          - {Name: day, Type: string}
+        StorageDescriptor:
+          Location: !Sub s3://${DataLakeBucket}/processed/snapshots/orders/
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe
+          Columns:
+            - {Name: id, Type: bigint}
+            - {Name: user_id, Type: string}
+            - {Name: status, Type: string}
+            - {Name: subtotal, Type: "decimal(10,2)"}
+            - {Name: tax, Type: "decimal(10,2)"}
+            - {Name: shipping_cost, Type: "decimal(10,2)"}
+            - {Name: total_amount, Type: "decimal(10,2)"}
+            - {Name: created_at, Type: timestamp}
+            - {Name: updated_at, Type: timestamp}
+            - {Name: snapshot_at, Type: timestamp}
+
+  OrderItemsTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref GlueDatabase
+      TableInput:
+        Name: order_items
+        Description: Order item snapshots extracted from MySQL.
+        TableType: EXTERNAL_TABLE
+        Parameters: {EXTERNAL: "TRUE", classification: parquet}
+        PartitionKeys:
+          - {Name: year, Type: string}
+          - {Name: month, Type: string}
+          - {Name: day, Type: string}
+        StorageDescriptor:
+          Location: !Sub s3://${DataLakeBucket}/processed/snapshots/order_items/
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe
+          Columns:
+            - {Name: id, Type: bigint}
+            - {Name: order_id, Type: bigint}
+            - {Name: product_id, Type: bigint}
+            - {Name: product_sku, Type: string}
+            - {Name: product_name, Type: string}
+            - {Name: quantity, Type: bigint}
+            - {Name: unit_price, Type: "decimal(10,2)"}
+            - {Name: subtotal, Type: "decimal(10,2)"}
+            - {Name: snapshot_at, Type: timestamp}
+
+  UsersTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref GlueDatabase
+      TableInput:
+        Name: users
+        Description: Sanitized user snapshots extracted from MongoDB.
+        TableType: EXTERNAL_TABLE
+        Parameters: {EXTERNAL: "TRUE", classification: parquet}
+        PartitionKeys:
+          - {Name: year, Type: string}
+          - {Name: month, Type: string}
+          - {Name: day, Type: string}
+        StorageDescriptor:
+          Location: !Sub s3://${DataLakeBucket}/processed/snapshots/users/
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe
+          Columns:
+            - {Name: user_id, Type: string}
+            - {Name: roles, Type: "array<string>"}
+            - {Name: currency, Type: string}
+            - {Name: theme, Type: string}
+            - {Name: created_at, Type: timestamp}
+            - {Name: snapshot_at, Type: timestamp}
+
+  OrderEventsTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref GlueDatabase
+      TableInput:
+        Name: order_events
+        Description: Order domain events in JSON Lines format.
+        TableType: EXTERNAL_TABLE
+        Parameters: {EXTERNAL: "TRUE", classification: json}
+        PartitionKeys:
+          - {Name: year, Type: string}
+          - {Name: month, Type: string}
+          - {Name: day, Type: string}
+        StorageDescriptor:
+          Location: !Sub s3://${DataLakeBucket}/raw/events/orders/
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.openx.data.jsonserde.JsonSerDe
+            Parameters:
+              ignore.malformed.json: "false"
+          Columns:
+            - {Name: event_id, Type: string}
+            - {Name: event_type, Type: string}
+            - {Name: timestamp, Type: string}
+            - {Name: source, Type: string}
+            - {Name: user_id, Type: string}
+            - {Name: session_id, Type: string}
+            - {Name: product_id, Type: bigint}
+            - {Name: order_id, Type: bigint}
+            - Name: payload
+              Type: "struct<status:string,total_amount:string,item_count:bigint,previous_status:string,new_status:string>"
+
+  CompatibilityEventsTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref GlueDatabase
+      TableInput:
+        Name: compatibility_events
+        Description: Compatibility domain events in JSON Lines format.
+        TableType: EXTERNAL_TABLE
+        Parameters: {EXTERNAL: "TRUE", classification: json}
+        PartitionKeys:
+          - {Name: year, Type: string}
+          - {Name: month, Type: string}
+          - {Name: day, Type: string}
+        StorageDescriptor:
+          Location: !Sub s3://${DataLakeBucket}/raw/events/compatibility/
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.openx.data.jsonserde.JsonSerDe
+            Parameters:
+              ignore.malformed.json: "false"
+          Columns:
+            - {Name: event_id, Type: string}
+            - {Name: event_type, Type: string}
+            - {Name: timestamp, Type: string}
+            - {Name: source, Type: string}
+            - {Name: user_id, Type: string}
+            - {Name: session_id, Type: string}
+            - {Name: product_id, Type: bigint}
+            - {Name: order_id, Type: bigint}
+            - Name: payload
+              Type: "struct<compatible:boolean,rules:array<string>,failed_rules:array<string>>"
+
+  CatalogEventsTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref GlueDatabase
+      TableInput:
+        Name: catalog_events
+        Description: Catalog domain events in JSON Lines format.
+        TableType: EXTERNAL_TABLE
+        Parameters: {EXTERNAL: "TRUE", classification: json}
+        PartitionKeys:
+          - {Name: year, Type: string}
+          - {Name: month, Type: string}
+          - {Name: day, Type: string}
+        StorageDescriptor:
+          Location: !Sub s3://${DataLakeBucket}/raw/events/catalog/
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.openx.data.jsonserde.JsonSerDe
+            Parameters:
+              ignore.malformed.json: "false"
+          Columns:
+            - {Name: event_id, Type: string}
+            - {Name: event_type, Type: string}
+            - {Name: timestamp, Type: string}
+            - {Name: source, Type: string}
+            - {Name: user_id, Type: string}
+            - {Name: session_id, Type: string}
+            - {Name: product_id, Type: bigint}
+            - {Name: order_id, Type: bigint}
+            - Name: payload
+              Type: "struct<sku:string,name:string,category:string,brand:string,price:string,previous_price:string,new_price:string,updated_fields:array<string>>"
+
+  IdentityEventsTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref GlueDatabase
+      TableInput:
+        Name: identity_events
+        Description: Identity domain events in JSON Lines format.
+        TableType: EXTERNAL_TABLE
+        Parameters: {EXTERNAL: "TRUE", classification: json}
+        PartitionKeys:
+          - {Name: year, Type: string}
+          - {Name: month, Type: string}
+          - {Name: day, Type: string}
+        StorageDescriptor:
+          Location: !Sub s3://${DataLakeBucket}/raw/events/identity/
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.openx.data.jsonserde.JsonSerDe
+            Parameters:
+              ignore.malformed.json: "false"
+          Columns:
+            - {Name: event_id, Type: string}
+            - {Name: event_type, Type: string}
+            - {Name: timestamp, Type: string}
+            - {Name: source, Type: string}
+            - {Name: user_id, Type: string}
+            - {Name: session_id, Type: string}
+            - {Name: product_id, Type: bigint}
+            - {Name: order_id, Type: bigint}
+            - Name: payload
+              Type: "struct<roles:array<string>,currency:string,theme:string,registered_at:string>"
+
+  NavigationEventsTable:
+    Type: AWS::Glue::Table
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref GlueDatabase
+      TableInput:
+        Name: navigation_events
+        Description: Synthetic navigation events in JSON Lines format.
+        TableType: EXTERNAL_TABLE
+        Parameters: {EXTERNAL: "TRUE", classification: json}
+        PartitionKeys:
+          - {Name: year, Type: string}
+          - {Name: month, Type: string}
+          - {Name: day, Type: string}
+        StorageDescriptor:
+          Location: !Sub s3://${DataLakeBucket}/raw/events/navigation/
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.openx.data.jsonserde.JsonSerDe
+            Parameters:
+              ignore.malformed.json: "false"
+          Columns:
+            - {Name: event_id, Type: string}
+            - {Name: event_type, Type: string}
+            - {Name: timestamp, Type: string}
+            - {Name: source, Type: string}
+            - {Name: user_id, Type: string}
+            - {Name: session_id, Type: string}
+            - {Name: product_id, Type: bigint}
+            - {Name: order_id, Type: bigint}
+            - Name: payload
+              Type: "struct<category:string>"
+
+  SnapshotsCrawler:
+    Type: AWS::Glue::Crawler
+    DependsOn:
+      - ProductsTable
+      - OrdersTable
+      - OrderItemsTable
+      - UsersTable
+    Properties:
+      Name: !Ref SnapshotsCrawlerName
+      Description: Updates schemas and date partitions for Parquet snapshots.
+      Role: !GetAtt GlueCrawlerRole.Arn
+      DatabaseName: !Ref GlueDatabase
+      Targets:
+        CatalogTargets:
+          - DatabaseName: !Ref GlueDatabase
+            Tables:
+              - products
+              - orders
+              - order_items
+              - users
+      RecrawlPolicy:
+        RecrawlBehavior: CRAWL_EVERYTHING
+      SchemaChangePolicy:
+        DeleteBehavior: LOG
+        UpdateBehavior: UPDATE_IN_DATABASE
+      Configuration: '{"Version":1.0,"CrawlerOutput":{"Partitions":{"AddOrUpdateBehavior":"InheritFromTable"}}}'
+
+  EventsCrawler:
+    Type: AWS::Glue::Crawler
+    DependsOn:
+      - OrderEventsTable
+      - CompatibilityEventsTable
+      - CatalogEventsTable
+      - IdentityEventsTable
+      - NavigationEventsTable
+    Properties:
+      Name: !Ref EventsCrawlerName
+      Description: Updates schemas and date partitions for raw JSON events.
+      Role: !GetAtt GlueCrawlerRole.Arn
+      DatabaseName: !Ref GlueDatabase
+      Targets:
+        CatalogTargets:
+          - DatabaseName: !Ref GlueDatabase
+            Tables:
+              - order_events
+              - compatibility_events
+              - catalog_events
+              - identity_events
+              - navigation_events
+      RecrawlPolicy:
+        RecrawlBehavior: CRAWL_EVERYTHING
+      SchemaChangePolicy:
+        DeleteBehavior: LOG
+        UpdateBehavior: UPDATE_IN_DATABASE
+      Configuration: '{"Version":1.0,"CrawlerOutput":{"Partitions":{"AddOrUpdateBehavior":"InheritFromTable"}}}'
+
+Outputs:
+  DatabaseName:
+    Value: !Ref GlueDatabase
+  GlueCrawlerRoleArn:
+    Value: !GetAtt GlueCrawlerRole.Arn
+  SnapshotsCrawlerName:
+    Value: !Ref SnapshotsCrawler
+  EventsCrawlerName:
+    Value: !Ref EventsCrawler

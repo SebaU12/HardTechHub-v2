@@ -1,0 +1,228 @@
+services:
+
+  # ── Identity Service (Python + MongoDB) ───────────────────────────────────
+  identity-service:
+    build:
+      context: ../services/identity-service
+    env_file: .env.app
+    environment:
+      MONGODB_URI: "mongodb://${MONGO_APP_USER:-hardtech}:${MONGO_APP_PASSWORD}@${DB_HOST}:27017/hardtech_identity?authSource=hardtech_identity"
+      MONGODB_DATABASE: hardtech_identity
+      MONGODB_USERS_COLLECTION: users
+      S3_BUCKET: ${S3_BUCKET:-hardtech-datalake}
+      S3_EVENTS_PREFIX: raw/events/identity/
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+      API_BASE_URL: ${API_BASE_URL:-}
+      INSTANCE_ID: ${INSTANCE_ID:-}
+    ports:
+      - "8001:8001"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8001/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+    networks:
+      - hardtech-app-net
+
+  # ── Catalog Service (TypeScript + PostgreSQL) ─────────────────────────────
+  catalog-service:
+    build:
+      context: ../services/catalog-service
+    env_file: .env.app
+    environment:
+      POSTGRES_HOST: ${DB_HOST}
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: hardtech_catalog
+      POSTGRES_USER: ${POSTGRES_USER:-hardtech}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      S3_BUCKET: ${S3_BUCKET:-hardtech-datalake}
+      S3_EVENTS_PREFIX: raw/events/catalog/
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+      API_BASE_URL: ${API_BASE_URL:-}
+      INSTANCE_ID: ${INSTANCE_ID:-}
+    ports:
+      - "8002:8002"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8002/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+    networks:
+      - hardtech-app-net
+
+  # ── Order Service (Python + MySQL) ────────────────────────────────────────
+  order-service:
+    build:
+      context: ../services/order-service
+    env_file: .env.app
+    environment:
+      MYSQL_HOST: ${DB_HOST}
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: hardtech_orders
+      MYSQL_USER: ${MYSQL_USER:-hardtech}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      CATALOG_SERVICE_URL: http://catalog-service:8002
+      S3_BUCKET: ${S3_BUCKET:-hardtech-datalake}
+      S3_EVENTS_PREFIX: raw/events/orders/
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+      API_BASE_URL: ${API_BASE_URL:-}
+      INSTANCE_ID: ${INSTANCE_ID:-}
+    ports:
+      - "8003:8003"
+    depends_on:
+      catalog-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8003/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+    networks:
+      - hardtech-app-net
+
+  # ── Compatibility Service (Go, sin base) ──────────────────────────────────
+  compatibility-service:
+    build:
+      context: ../services/compatibility-service
+    env_file: .env.app
+    environment:
+      CATALOG_SERVICE_URL: http://catalog-service:8002
+      S3_BUCKET: ${S3_BUCKET:-hardtech-datalake}
+      S3_EVENTS_PREFIX: raw/events/compatibility/
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+      API_BASE_URL: ${API_BASE_URL:-}
+      INSTANCE_ID: ${INSTANCE_ID:-}
+    ports:
+      - "8004:8004"
+    depends_on:
+      catalog-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8004/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - hardtech-app-net
+
+  # ── Analytics Service (Python + Athena) ───────────────────────────────────
+  analytics-service:
+    build:
+      context: ..
+      dockerfile: services/analytics-service/Dockerfile
+    env_file: .env.app
+    environment:
+      ANALYTICS_BACKEND: ${ANALYTICS_BACKEND:-athena}
+      S3_BUCKET: ${S3_BUCKET:-hardtech-datalake}
+      S3_EVENTS_PREFIX: raw/events/
+      ATHENA_DATABASE: ${ATHENA_DATABASE:-hardtech_analytics}
+      ATHENA_WORKGROUP: ${ATHENA_WORKGROUP:-hardtech-workgroup}
+      ATHENA_OUTPUT_LOCATION: s3://${S3_BUCKET:-hardtech-datalake}/athena-results/
+      ATHENA_QUERIES_DIR: /app/queries
+      ATHENA_QUERY_TIMEOUT_SECONDS: "60"
+      ATHENA_POLL_INTERVAL_SECONDS: "1"
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+      API_BASE_URL: ${API_BASE_URL:-}
+      INSTANCE_ID: ${INSTANCE_ID:-}
+    ports:
+      - "8005:8005"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8005/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    restart: unless-stopped
+    networks:
+      - hardtech-app-net
+
+  # ── Ingestor de navegación ────────────────────────────────────────────────
+  ingestor:
+    build:
+      context: ../ingestion
+    env_file: .env.app
+    environment:
+      S3_BUCKET: ${S3_BUCKET:-hardtech-datalake}
+      S3_EVENTS_PREFIX: raw/events/navigation/
+      S3_PROCESSED_PREFIX: processed/events/navigation/
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+      BATCH_SIZE: "10"
+      INTERVAL_SECONDS: "30"
+    restart: unless-stopped
+    networks:
+      - hardtech-app-net
+
+  # ── Ingestor de catálogo (snapshot → Parquet en S3) ───────────────────────
+  catalog-ingestor:
+    build:
+      context: ../ingestion
+    command: ["python", "catalog_ingestor.py"]
+    env_file: .env.app
+    environment:
+      S3_BUCKET: ${S3_BUCKET:-hardtech-datalake}
+      S3_OUTPUT_PREFIX: processed/snapshots/products/
+      POSTGRES_HOST: ${DB_HOST}
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: hardtech_catalog
+      POSTGRES_USER: ${POSTGRES_READER_USER:-hardtech_reader}
+      POSTGRES_PASSWORD: ${POSTGRES_READER_PASSWORD}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+      RUN_ONCE: "false"
+      SNAPSHOT_INTERVAL_SECONDS: "300"
+    restart: unless-stopped
+    networks:
+      - hardtech-app-net
+
+  # ── Ingestor de órdenes (snapshot → Parquet en S3) ────────────────────────
+  orders-ingestor:
+    build:
+      context: ../ingestion
+    command: ["python", "orders_ingestor.py"]
+    env_file: .env.app
+    environment:
+      S3_BUCKET: ${S3_BUCKET:-hardtech-datalake}
+      S3_ORDERS_PREFIX: processed/snapshots/orders/
+      S3_ORDER_ITEMS_PREFIX: processed/snapshots/order_items/
+      MYSQL_HOST: ${DB_HOST}
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: hardtech_orders
+      MYSQL_USER: ${MYSQL_READER_USER:-hardtech_reader}
+      MYSQL_PASSWORD: ${MYSQL_READER_PASSWORD}
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+      RUN_ONCE: "false"
+      SNAPSHOT_INTERVAL_SECONDS: "300"
+    restart: unless-stopped
+    networks:
+      - hardtech-app-net
+
+  # ── Ingestor de identidad (snapshot → Parquet en S3) ─────────────────────
+  identity-ingestor:
+    build:
+      context: ../ingestion
+    command: ["python", "identity_ingestor.py"]
+    env_file: .env.app
+    environment:
+      S3_BUCKET: ${S3_BUCKET:-hardtech-datalake}
+      S3_OUTPUT_PREFIX: processed/snapshots/users/
+      MONGODB_URI: "mongodb://${MONGO_READER_USER:-hardtech_reader}:${MONGO_READER_PASSWORD}@${DB_HOST}:27017/hardtech_identity?authSource=hardtech_identity"
+      MONGODB_DATABASE: hardtech_identity
+      MONGODB_USERS_COLLECTION: users
+      MONGODB_BATCH_SIZE: "1000"
+      AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-1}
+      RUN_ONCE: "false"
+      SNAPSHOT_INTERVAL_SECONDS: "300"
+    restart: unless-stopped
+    networks:
+      - hardtech-app-net
+
+networks:
+  hardtech-app-net:
+    driver: bridge

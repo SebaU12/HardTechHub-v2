@@ -1,0 +1,1301 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  HardTech Hub — Security Groups, IAM, EC2 (App x2 + Data),
+  ALB interno, Target Groups y API Gateway HTTP API con VPC Link v2.
+  Fases 4 y 5. Usar la VPC por defecto y sus subredes como parámetros.
+
+# ---------------------------------------------------------------------------
+# Parameters
+# ---------------------------------------------------------------------------
+Parameters:
+
+  AMI:
+    Type: String
+    Default: "ami-0b33d2f1547e52c78"
+    Description: "ID de AMI (Amazon Linux 2023, us-east-1)"
+
+  AppInstanceType:
+    Type: String
+    Default: t3.small
+    AllowedValues: [t2.micro, t2.small, t3.micro, t3.small, t3.medium]
+    Description: "Tipo de instancia para las VMs de aplicación"
+
+  DataInstanceType:
+    Type: String
+    Default: t3.medium
+    AllowedValues: [t2.small, t2.medium, t3.small, t3.medium, t3.large]
+    Description: "Tipo de instancia para la VM de datos"
+
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: "Par de claves SSH para administración"
+
+  ProjectName:
+    Type: String
+    Default: hardtech
+    Description: "Prefijo para nombrar todos los recursos"
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: "VPC donde desplegar (VPC por defecto)"
+
+  VpcCidr:
+    Type: String
+    Default: "172.31.0.0/16"
+    Description: "CIDR de la VPC (172.31.0.0/16 para la VPC por defecto)"
+
+  AppSubnet1Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: "Subred para App 1 y ALB — AZ-a"
+
+  AppSubnet2Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: "Subred para App 2 y ALB — AZ-b (distinta AZ)"
+
+  DataSubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: "Subred para VM de datos"
+
+  # ── Fase 7: Analytics ──────────────────────────────────────────────────────
+  DataLakeBucketName:
+    Type: String
+    Default: hardtech-datalake
+    Description: "Nombre del bucket S3 para el data lake (debe ser único globalmente)"
+
+  GlueDatabaseName:
+    Type: String
+    Default: hardtech_analytics
+    AllowedPattern: "[a-z0-9_]+"
+    Description: "Nombre de la base de datos en el Glue Data Catalog"
+
+  AthenaWorkGroupName:
+    Type: String
+    Default: hardtech-workgroup
+    AllowedPattern: "[a-zA-Z0-9._-]+"
+    Description: "Nombre del workgroup de Athena"
+
+  SnapshotsCrawlerName:
+    Type: String
+    Default: hardtech-snapshots-crawler
+    Description: "Nombre del crawler de Glue para snapshots Parquet"
+
+  EventsCrawlerName:
+    Type: String
+    Default: hardtech-events-crawler
+    Description: "Nombre del crawler de Glue para eventos JSON"
+
+# ---------------------------------------------------------------------------
+# Resources
+# ---------------------------------------------------------------------------
+Resources:
+
+  # ── Security Groups ───────────────────────────────────────────────────────
+
+  # VPC Link: ENIs creadas por API Gateway para conectarse al ALB
+  SGVPCLink:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "HardTech VPC Link — salida al ALB interno"
+      VpcId: !Ref VpcId
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-sg-vpclink"
+
+  # ALB interno: acepta HTTP solo desde el VPC Link
+  SGALB:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "HardTech ALB interno — HTTP desde VPC Link"
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - Description: "HTTP desde VPC Link (API Gateway)"
+          IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref SGVPCLink
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-sg-alb"
+
+  # VMs de aplicación: servicios desde ALB y SSH desde VPC
+  SGApp:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "HardTech VMs app — servicios desde ALB y SSH desde VPC"
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - Description: "Cinco APIs desde ALB"
+          IpProtocol: tcp
+          FromPort: 8001
+          ToPort: 8005
+          SourceSecurityGroupId: !Ref SGALB
+        - Description: "SSH desde VPC"
+          IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref VpcCidr
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-sg-app"
+
+  # VM de datos: puertos de BD solo desde VMs de aplicación
+  SGData:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "HardTech VM datos — DB solo desde SGApp"
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - Description: "PostgreSQL desde VMs app"
+          IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref SGApp
+        - Description: "MySQL desde VMs app"
+          IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref SGApp
+        - Description: "MongoDB desde VMs app"
+          IpProtocol: tcp
+          FromPort: 27017
+          ToPort: 27017
+          SourceSecurityGroupId: !Ref SGApp
+        - Description: "SSH desde VPC"
+          IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref VpcCidr
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-sg-data"
+
+  # ── Rol IAM para instancias de aplicación ─────────────────────────────────
+  AppInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-app-ec2-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - !Ref AthenaQueryPolicy
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-app-ec2-role"
+
+  AppInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub "${ProjectName}-app-ec2-profile"
+      Roles:
+        - !Ref AppInstanceRole
+
+  # ── Parámetro: repo Git del proyecto ─────────────────────────────────────
+  # (se usa en UserData para clonar automáticamente al arrancar las EC2)
+
+  # ── EC2: VM de aplicación 1 ───────────────────────────────────────────────
+  AppInstance1:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref AMI
+      InstanceType: !Ref AppInstanceType
+      KeyName: !Ref KeyName
+      SubnetId: !Ref AppSubnet1Id
+      SecurityGroupIds:
+        - !Ref SGApp
+      IamInstanceProfile: !Ref AppInstanceProfile
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -e
+          yum update -y
+          yum install -y docker git
+          systemctl start docker
+          systemctl enable docker
+          usermod -aG docker ec2-user
+          mkdir -p /usr/local/lib/docker/cli-plugins
+          curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \
+            -o /usr/local/lib/docker/cli-plugins/docker-compose
+          chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+          ln -sf /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/bin/docker-compose
+          # Clonar repositorio del proyecto
+          git clone https://github.com/SebaU12/Proyecto.git /home/ec2-user/app
+          chown -R ec2-user:ec2-user /home/ec2-user/app
+          # Obtener INSTANCE_ID via IMDSv2
+          TOKEN=$(curl -sX PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+          INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id || hostname)
+          echo "INSTANCE_ID=$INSTANCE_ID" >> /home/ec2-user/app/deploy/.env.app
+          echo "AWS_DEFAULT_REGION=${AWS::Region}" >> /home/ec2-user/app/deploy/.env.app
+          echo "S3_BUCKET=${DataLakeBucketName}" >> /home/ec2-user/app/deploy/.env.app
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-app-1"
+
+  # ── EC2: VM de aplicación 2 ───────────────────────────────────────────────
+  AppInstance2:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref AMI
+      InstanceType: !Ref AppInstanceType
+      KeyName: !Ref KeyName
+      SubnetId: !Ref AppSubnet2Id
+      SecurityGroupIds:
+        - !Ref SGApp
+      IamInstanceProfile: !Ref AppInstanceProfile
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -e
+          yum update -y
+          yum install -y docker git
+          systemctl start docker
+          systemctl enable docker
+          usermod -aG docker ec2-user
+          mkdir -p /usr/local/lib/docker/cli-plugins
+          curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \
+            -o /usr/local/lib/docker/cli-plugins/docker-compose
+          chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+          ln -sf /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/bin/docker-compose
+          # Clonar repositorio del proyecto
+          git clone https://github.com/SebaU12/Proyecto.git /home/ec2-user/app
+          chown -R ec2-user:ec2-user /home/ec2-user/app
+          # Obtener INSTANCE_ID via IMDSv2
+          TOKEN=$(curl -sX PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+          INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id || hostname)
+          echo "INSTANCE_ID=$INSTANCE_ID" >> /home/ec2-user/app/deploy/.env.app
+          echo "AWS_DEFAULT_REGION=${AWS::Region}" >> /home/ec2-user/app/deploy/.env.app
+          echo "S3_BUCKET=${DataLakeBucketName}" >> /home/ec2-user/app/deploy/.env.app
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-app-2"
+
+  # ── EC2: VM de datos (sin IP pública) ────────────────────────────────────
+  DataInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref AMI
+      InstanceType: !Ref DataInstanceType
+      KeyName: !Ref KeyName
+      NetworkInterfaces:
+        - DeviceIndex: 0
+          SubnetId: !Ref DataSubnetId
+          GroupSet:
+            - !Ref SGData
+          AssociatePublicIpAddress: false
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          set -e
+          yum update -y
+          yum install -y docker git
+          systemctl start docker
+          systemctl enable docker
+          usermod -aG docker ec2-user
+          mkdir -p /usr/local/lib/docker/cli-plugins
+          curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \
+            -o /usr/local/lib/docker/cli-plugins/docker-compose
+          chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+          ln -sf /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/bin/docker-compose
+          # Clonar repositorio del proyecto
+          git clone https://github.com/SebaU12/Proyecto.git /home/ec2-user/app
+          chown -R ec2-user:ec2-user /home/ec2-user/app
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-data"
+
+  # ── ALB interno ───────────────────────────────────────────────────────────
+  ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${ProjectName}-alb"
+      Scheme: internal
+      Type: application
+      Subnets:
+        - !Ref AppSubnet1Id
+        - !Ref AppSubnet2Id
+      SecurityGroups:
+        - !Ref SGALB
+      Tags:
+        - Key: Name
+          Value: !Sub "${ProjectName}-alb"
+
+  # ── Target Groups ─────────────────────────────────────────────────────────
+
+  TGIdentity:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${ProjectName}-tg-identity"
+      Protocol: HTTP
+      Port: 8001
+      VpcId: !Ref VpcId
+      TargetType: instance
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Targets:
+        - Id: !Ref AppInstance1
+          Port: 8001
+        - Id: !Ref AppInstance2
+          Port: 8001
+
+  TGCatalog:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${ProjectName}-tg-catalog"
+      Protocol: HTTP
+      Port: 8002
+      VpcId: !Ref VpcId
+      TargetType: instance
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Targets:
+        - Id: !Ref AppInstance1
+          Port: 8002
+        - Id: !Ref AppInstance2
+          Port: 8002
+
+  TGOrders:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${ProjectName}-tg-orders"
+      Protocol: HTTP
+      Port: 8003
+      VpcId: !Ref VpcId
+      TargetType: instance
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Targets:
+        - Id: !Ref AppInstance1
+          Port: 8003
+        - Id: !Ref AppInstance2
+          Port: 8003
+
+  TGCompatibility:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${ProjectName}-tg-compatibility"
+      Protocol: HTTP
+      Port: 8004
+      VpcId: !Ref VpcId
+      TargetType: instance
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Targets:
+        - Id: !Ref AppInstance1
+          Port: 8004
+        - Id: !Ref AppInstance2
+          Port: 8004
+
+  TGAnalytics:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${ProjectName}-tg-analytics"
+      Protocol: HTTP
+      Port: 8005
+      VpcId: !Ref VpcId
+      TargetType: instance
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Targets:
+        - Id: !Ref AppInstance1
+          Port: 8005
+        - Id: !Ref AppInstance2
+          Port: 8005
+
+  # ── Listener ALB ─────────────────────────────────────────────────────────
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ALB
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - Type: fixed-response
+          FixedResponseConfig:
+            StatusCode: "404"
+            ContentType: "application/json"
+            MessageBody: '{"detail":"route not found"}'
+
+  # ── Reglas ALB: APIs ──────────────────────────────────────────────────────
+
+  RuleIdentity:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref ALBListener
+      Priority: 10
+      Conditions:
+        - Field: path-pattern
+          Values: ["/api/auth*"]
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TGIdentity
+
+  RuleCatalog:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref ALBListener
+      Priority: 20
+      Conditions:
+        - Field: path-pattern
+          Values: ["/api/products*"]
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TGCatalog
+
+  RuleOrders:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref ALBListener
+      Priority: 30
+      Conditions:
+        - Field: path-pattern
+          Values: ["/api/orders*"]
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TGOrders
+
+  RuleCompatibility:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref ALBListener
+      Priority: 40
+      Conditions:
+        - Field: path-pattern
+          Values: ["/api/compatibility*"]
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TGCompatibility
+
+  RuleAnalytics:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref ALBListener
+      Priority: 50
+      Conditions:
+        - Field: path-pattern
+          Values: ["/api/analytics*"]
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TGAnalytics
+
+  # ── Reglas ALB: Swagger (Fase 6) ──────────────────────────────────────────
+
+  RuleIdentityDocs:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref ALBListener
+      Priority: 11
+      Conditions:
+        - Field: path-pattern
+          Values: ["/identity/docs*", "/identity/openapi.json"]
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TGIdentity
+
+  RuleCatalogDocs:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref ALBListener
+      Priority: 21
+      Conditions:
+        - Field: path-pattern
+          Values: ["/catalog/docs*", "/catalog/openapi.json"]
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TGCatalog
+
+  RuleOrdersDocs:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref ALBListener
+      Priority: 31
+      Conditions:
+        - Field: path-pattern
+          Values: ["/orders/docs*", "/orders/openapi.json"]
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TGOrders
+
+  RuleCompatibilityDocs:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref ALBListener
+      Priority: 41
+      Conditions:
+        - Field: path-pattern
+          Values: ["/compatibility/docs*", "/compatibility/openapi.json"]
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TGCompatibility
+
+  RuleAnalyticsDocs:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref ALBListener
+      Priority: 51
+      Conditions:
+        - Field: path-pattern
+          Values: ["/analytics/docs*", "/analytics/openapi.json"]
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TGAnalytics
+
+  # =========================================================================
+  # FASE 5 — API Gateway HTTP API + VPC Link v2
+  # =========================================================================
+
+  # ── Log group para acceso del API Gateway ────────────────────────────────
+  ApiAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/apigateway/${ProjectName}"
+      RetentionInDays: 7
+
+  # ── VPC Link v2 (conecta API GW al ALB interno) ──────────────────────────
+  VPCLink:
+    Type: AWS::ApiGatewayV2::VpcLink
+    Properties:
+      Name: !Sub "${ProjectName}-vpc-link"
+      SubnetIds:
+        - !Ref AppSubnet1Id
+        - !Ref AppSubnet2Id
+      SecurityGroupIds:
+        - !Ref SGVPCLink
+
+  # ── HTTP API ──────────────────────────────────────────────────────────────
+  HttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub "${ProjectName}-api"
+      ProtocolType: HTTP
+      Description: "HardTech Hub — API pública HTTPS via VPC Link → ALB interno"
+      CorsConfiguration:
+        AllowMethods:
+          - GET
+          - POST
+          - PUT
+          - PATCH
+          - DELETE
+          - OPTIONS
+        AllowOrigins:
+          - "*"
+        AllowHeaders:
+          - "*"
+          - Authorization
+          - Content-Type
+
+  # ── Integración privada HTTP_PROXY → ALB Listener ────────────────────────
+  ALBIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: HTTP_PROXY
+      IntegrationMethod: ANY
+      IntegrationUri: !Ref ALBListener
+      ConnectionType: VPC_LINK
+      ConnectionId: !Ref VPCLink
+      PayloadFormatVersion: "1.0"
+
+  # ── Ruta catch-all: ANY /{proxy+} ────────────────────────────────────────
+  # El ALB ya tiene las reglas por ruta; API GW reenvía todo sin modificar el path.
+  RouteProxy:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "ANY /{proxy+}"
+      Target: !Sub "integrations/${ALBIntegration}"
+
+  RouteRoot:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: "ANY /"
+      Target: !Sub "integrations/${ALBIntegration}"
+
+  # ── Stage $default (sin prefijo en la URL pública) ───────────────────────
+  # Con $default el endpoint es: https://{api-id}.execute-api.{region}.amazonaws.com/api/...
+  # Las reglas del ALB reciben el path completo sin prefijo de stage.
+  ApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref HttpApi
+      StageName: "$default"
+      AutoDeploy: true
+      AccessLogSettings:
+        DestinationArn: !GetAtt ApiAccessLogGroup.Arn
+        Format: >-
+          {"requestId":"$context.requestId",
+           "ip":"$context.identity.sourceIp",
+           "requestTime":"$context.requestTime",
+           "httpMethod":"$context.httpMethod",
+           "routeKey":"$context.routeKey",
+           "status":"$context.status",
+           "responseLength":"$context.responseLength",
+           "integrationLatency":"$context.integrationLatency"}
+      DefaultRouteSettings:
+        ThrottlingBurstLimit: 200
+        ThrottlingRateLimit: 100
+
+  # =========================================================================
+  # FASE 7 — Data Lake: S3, Glue Data Catalog y Athena
+  # =========================================================================
+
+  # ── Bucket S3: Data Lake ─────────────────────────────────────────────────
+  DataLakeBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref DataLakeBucketName
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-athena-results
+            Status: Enabled
+            Prefix: athena-results/
+            ExpirationInDays: 30
+      Tags:
+        - Key: project
+          Value: hardtech-hub
+        - Key: phase
+          Value: analytics
+
+  # ── IAM Role para Glue Crawlers ──────────────────────────────────────────
+  GlueCrawlerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-glue-crawler-role"
+      Description: "Acceso de lectura al data lake usado por los crawlers de Glue."
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: glue.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Policies:
+        - PolicyName: ReadHardTechDataLake
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ListAnalyticalPrefixes
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${DataLakeBucketName}"
+                Condition:
+                  StringLike:
+                    s3:prefix:
+                      - "processed/snapshots/*"
+                      - "raw/events/*"
+              - Sid: ReadAnalyticalObjects
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:s3:::${DataLakeBucketName}/processed/snapshots/*"
+                  - !Sub "arn:${AWS::Partition}:s3:::${DataLakeBucketName}/raw/events/*"
+
+  # ── Glue Database ────────────────────────────────────────────────────────
+  GlueDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: !Ref GlueDatabaseName
+        Description: "HardTech Hub — datasets analíticos almacenados en S3."
+
+  # ── Glue Tables: Snapshots Parquet ───────────────────────────────────────
+
+  GlueTableProducts:
+    Type: AWS::Glue::Table
+    DependsOn: GlueDatabase
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref GlueDatabaseName
+      TableInput:
+        Name: products
+        Description: "Product snapshots extraídos de PostgreSQL."
+        TableType: EXTERNAL_TABLE
+        Parameters:
+          EXTERNAL: "TRUE"
+          classification: parquet
+        PartitionKeys:
+          - {Name: year, Type: string}
+          - {Name: month, Type: string}
+          - {Name: day, Type: string}
+        StorageDescriptor:
+          Location: !Sub "s3://${DataLakeBucketName}/processed/snapshots/products/"
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe
+          Columns:
+            - {Name: id, Type: bigint}
+            - {Name: sku, Type: string}
+            - {Name: name, Type: string}
+            - {Name: description, Type: string}
+            - {Name: price, Type: "decimal(10,2)"}
+            - {Name: specs, Type: string}
+            - {Name: image_url, Type: string}
+            - {Name: category, Type: string}
+            - {Name: brand, Type: string}
+            - {Name: is_active, Type: boolean}
+            - {Name: created_at, Type: timestamp}
+            - {Name: snapshot_at, Type: timestamp}
+
+  GlueTableOrders:
+    Type: AWS::Glue::Table
+    DependsOn: GlueDatabase
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref GlueDatabaseName
+      TableInput:
+        Name: orders
+        Description: "Order snapshots extraídos de MySQL."
+        TableType: EXTERNAL_TABLE
+        Parameters: {EXTERNAL: "TRUE", classification: parquet}
+        PartitionKeys:
+          - {Name: year, Type: string}
+          - {Name: month, Type: string}
+          - {Name: day, Type: string}
+        StorageDescriptor:
+          Location: !Sub "s3://${DataLakeBucketName}/processed/snapshots/orders/"
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe
+          Columns:
+            - {Name: id, Type: bigint}
+            - {Name: user_id, Type: string}
+            - {Name: status, Type: string}
+            - {Name: subtotal, Type: "decimal(10,2)"}
+            - {Name: tax, Type: "decimal(10,2)"}
+            - {Name: shipping_cost, Type: "decimal(10,2)"}
+            - {Name: total_amount, Type: "decimal(10,2)"}
+            - {Name: created_at, Type: timestamp}
+            - {Name: updated_at, Type: timestamp}
+            - {Name: snapshot_at, Type: timestamp}
+
+  GlueTableOrderItems:
+    Type: AWS::Glue::Table
+    DependsOn: GlueDatabase
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref GlueDatabaseName
+      TableInput:
+        Name: order_items
+        Description: "Order item snapshots extraídos de MySQL."
+        TableType: EXTERNAL_TABLE
+        Parameters: {EXTERNAL: "TRUE", classification: parquet}
+        PartitionKeys:
+          - {Name: year, Type: string}
+          - {Name: month, Type: string}
+          - {Name: day, Type: string}
+        StorageDescriptor:
+          Location: !Sub "s3://${DataLakeBucketName}/processed/snapshots/order_items/"
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe
+          Columns:
+            - {Name: id, Type: bigint}
+            - {Name: order_id, Type: bigint}
+            - {Name: product_id, Type: bigint}
+            - {Name: product_sku, Type: string}
+            - {Name: product_name, Type: string}
+            - {Name: quantity, Type: bigint}
+            - {Name: unit_price, Type: "decimal(10,2)"}
+            - {Name: subtotal, Type: "decimal(10,2)"}
+            - {Name: snapshot_at, Type: timestamp}
+
+  GlueTableUsers:
+    Type: AWS::Glue::Table
+    DependsOn: GlueDatabase
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref GlueDatabaseName
+      TableInput:
+        Name: users
+        Description: "User snapshots anonimizados extraídos de MongoDB."
+        TableType: EXTERNAL_TABLE
+        Parameters: {EXTERNAL: "TRUE", classification: parquet}
+        PartitionKeys:
+          - {Name: year, Type: string}
+          - {Name: month, Type: string}
+          - {Name: day, Type: string}
+        StorageDescriptor:
+          Location: !Sub "s3://${DataLakeBucketName}/processed/snapshots/users/"
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe
+          Columns:
+            - {Name: user_id, Type: string}
+            - {Name: roles, Type: "array<string>"}
+            - {Name: currency, Type: string}
+            - {Name: theme, Type: string}
+            - {Name: created_at, Type: timestamp}
+            - {Name: snapshot_at, Type: timestamp}
+
+  # ── Glue Tables: Eventos JSON Lines ──────────────────────────────────────
+
+  GlueTableOrderEvents:
+    Type: AWS::Glue::Table
+    DependsOn: GlueDatabase
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref GlueDatabaseName
+      TableInput:
+        Name: order_events
+        Description: "Eventos de dominio de órdenes en JSON Lines."
+        TableType: EXTERNAL_TABLE
+        Parameters: {EXTERNAL: "TRUE", classification: json}
+        PartitionKeys:
+          - {Name: year, Type: string}
+          - {Name: month, Type: string}
+          - {Name: day, Type: string}
+        StorageDescriptor:
+          Location: !Sub "s3://${DataLakeBucketName}/raw/events/orders/"
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.openx.data.jsonserde.JsonSerDe
+            Parameters:
+              ignore.malformed.json: "false"
+          Columns:
+            - {Name: event_id, Type: string}
+            - {Name: event_type, Type: string}
+            - {Name: timestamp, Type: string}
+            - {Name: source, Type: string}
+            - {Name: user_id, Type: string}
+            - {Name: session_id, Type: string}
+            - {Name: product_id, Type: bigint}
+            - {Name: order_id, Type: bigint}
+            - Name: payload
+              Type: "struct<status:string,total_amount:string,item_count:bigint,previous_status:string,new_status:string>"
+
+  GlueTableCompatibilityEvents:
+    Type: AWS::Glue::Table
+    DependsOn: GlueDatabase
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref GlueDatabaseName
+      TableInput:
+        Name: compatibility_events
+        Description: "Eventos de dominio de compatibilidad en JSON Lines."
+        TableType: EXTERNAL_TABLE
+        Parameters: {EXTERNAL: "TRUE", classification: json}
+        PartitionKeys:
+          - {Name: year, Type: string}
+          - {Name: month, Type: string}
+          - {Name: day, Type: string}
+        StorageDescriptor:
+          Location: !Sub "s3://${DataLakeBucketName}/raw/events/compatibility/"
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.openx.data.jsonserde.JsonSerDe
+            Parameters:
+              ignore.malformed.json: "false"
+          Columns:
+            - {Name: event_id, Type: string}
+            - {Name: event_type, Type: string}
+            - {Name: timestamp, Type: string}
+            - {Name: source, Type: string}
+            - {Name: user_id, Type: string}
+            - {Name: session_id, Type: string}
+            - {Name: product_id, Type: bigint}
+            - {Name: order_id, Type: bigint}
+            - Name: payload
+              Type: "struct<compatible:boolean,rules:array<string>,failed_rules:array<string>>"
+
+  GlueTableCatalogEvents:
+    Type: AWS::Glue::Table
+    DependsOn: GlueDatabase
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref GlueDatabaseName
+      TableInput:
+        Name: catalog_events
+        Description: "Eventos de dominio de catálogo en JSON Lines."
+        TableType: EXTERNAL_TABLE
+        Parameters: {EXTERNAL: "TRUE", classification: json}
+        PartitionKeys:
+          - {Name: year, Type: string}
+          - {Name: month, Type: string}
+          - {Name: day, Type: string}
+        StorageDescriptor:
+          Location: !Sub "s3://${DataLakeBucketName}/raw/events/catalog/"
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.openx.data.jsonserde.JsonSerDe
+            Parameters:
+              ignore.malformed.json: "false"
+          Columns:
+            - {Name: event_id, Type: string}
+            - {Name: event_type, Type: string}
+            - {Name: timestamp, Type: string}
+            - {Name: source, Type: string}
+            - {Name: user_id, Type: string}
+            - {Name: session_id, Type: string}
+            - {Name: product_id, Type: bigint}
+            - {Name: order_id, Type: bigint}
+            - Name: payload
+              Type: "struct<sku:string,name:string,category:string,brand:string,price:string,previous_price:string,new_price:string,updated_fields:array<string>>"
+
+  GlueTableIdentityEvents:
+    Type: AWS::Glue::Table
+    DependsOn: GlueDatabase
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref GlueDatabaseName
+      TableInput:
+        Name: identity_events
+        Description: "Eventos de dominio de identidad en JSON Lines."
+        TableType: EXTERNAL_TABLE
+        Parameters: {EXTERNAL: "TRUE", classification: json}
+        PartitionKeys:
+          - {Name: year, Type: string}
+          - {Name: month, Type: string}
+          - {Name: day, Type: string}
+        StorageDescriptor:
+          Location: !Sub "s3://${DataLakeBucketName}/raw/events/identity/"
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.openx.data.jsonserde.JsonSerDe
+            Parameters:
+              ignore.malformed.json: "false"
+          Columns:
+            - {Name: event_id, Type: string}
+            - {Name: event_type, Type: string}
+            - {Name: timestamp, Type: string}
+            - {Name: source, Type: string}
+            - {Name: user_id, Type: string}
+            - {Name: session_id, Type: string}
+            - {Name: product_id, Type: bigint}
+            - {Name: order_id, Type: bigint}
+            - Name: payload
+              Type: "struct<roles:array<string>,currency:string,theme:string,registered_at:string>"
+
+  GlueTableNavigationEvents:
+    Type: AWS::Glue::Table
+    DependsOn: GlueDatabase
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref GlueDatabaseName
+      TableInput:
+        Name: navigation_events
+        Description: "Eventos de navegación sintéticos en JSON Lines."
+        TableType: EXTERNAL_TABLE
+        Parameters: {EXTERNAL: "TRUE", classification: json}
+        PartitionKeys:
+          - {Name: year, Type: string}
+          - {Name: month, Type: string}
+          - {Name: day, Type: string}
+        StorageDescriptor:
+          Location: !Sub "s3://${DataLakeBucketName}/raw/events/navigation/"
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.openx.data.jsonserde.JsonSerDe
+            Parameters:
+              ignore.malformed.json: "false"
+          Columns:
+            - {Name: event_id, Type: string}
+            - {Name: event_type, Type: string}
+            - {Name: timestamp, Type: string}
+            - {Name: source, Type: string}
+            - {Name: user_id, Type: string}
+            - {Name: session_id, Type: string}
+            - {Name: product_id, Type: bigint}
+            - {Name: order_id, Type: bigint}
+            - Name: payload
+              Type: "struct<category:string>"
+
+  # ── Glue Crawlers ────────────────────────────────────────────────────────
+
+  SnapshotsCrawler:
+    Type: AWS::Glue::Crawler
+    DependsOn:
+      - GlueTableProducts
+      - GlueTableOrders
+      - GlueTableOrderItems
+      - GlueTableUsers
+    Properties:
+      Name: !Ref SnapshotsCrawlerName
+      Description: "Actualiza esquemas y particiones de fecha para snapshots Parquet."
+      Role: !GetAtt GlueCrawlerRole.Arn
+      DatabaseName: !Ref GlueDatabaseName
+      Targets:
+        CatalogTargets:
+          - DatabaseName: !Ref GlueDatabaseName
+            Tables:
+              - products
+              - orders
+              - order_items
+              - users
+      RecrawlPolicy:
+        RecrawlBehavior: CRAWL_EVERYTHING
+      SchemaChangePolicy:
+        DeleteBehavior: LOG
+        UpdateBehavior: UPDATE_IN_DATABASE
+      Configuration: '{"Version":1.0,"CrawlerOutput":{"Partitions":{"AddOrUpdateBehavior":"InheritFromTable"}}}'
+
+  EventsCrawler:
+    Type: AWS::Glue::Crawler
+    DependsOn:
+      - GlueTableOrderEvents
+      - GlueTableCompatibilityEvents
+      - GlueTableCatalogEvents
+      - GlueTableIdentityEvents
+      - GlueTableNavigationEvents
+    Properties:
+      Name: !Ref EventsCrawlerName
+      Description: "Actualiza esquemas y particiones de fecha para eventos JSON."
+      Role: !GetAtt GlueCrawlerRole.Arn
+      DatabaseName: !Ref GlueDatabaseName
+      Targets:
+        CatalogTargets:
+          - DatabaseName: !Ref GlueDatabaseName
+            Tables:
+              - order_events
+              - compatibility_events
+              - catalog_events
+              - identity_events
+              - navigation_events
+      RecrawlPolicy:
+        RecrawlBehavior: CRAWL_EVERYTHING
+      SchemaChangePolicy:
+        DeleteBehavior: LOG
+        UpdateBehavior: UPDATE_IN_DATABASE
+      Configuration: '{"Version":1.0,"CrawlerOutput":{"Partitions":{"AddOrUpdateBehavior":"InheritFromTable"}}}'
+
+  # ── Athena Workgroup ─────────────────────────────────────────────────────
+  AthenaWorkGroup:
+    Type: AWS::Athena::WorkGroup
+    Properties:
+      Name: !Ref AthenaWorkGroupName
+      Description: "HardTech Hub — queries analíticos sobre el Glue Data Catalog."
+      State: ENABLED
+      RecursiveDeleteOption: true
+      WorkGroupConfiguration:
+        EnforceWorkGroupConfiguration: true
+        PublishCloudWatchMetricsEnabled: true
+        BytesScannedCutoffPerQuery: 100000000
+        EngineVersion:
+          SelectedEngineVersion: "Athena engine version 3"
+        ResultConfiguration:
+          OutputLocation: !Sub "s3://${DataLakeBucketName}/athena-results/"
+          EncryptionConfiguration:
+            EncryptionOption: SSE_S3
+      Tags:
+        - Key: project
+          Value: hardtech-hub
+        - Key: phase
+          Value: analytics
+
+  # ── IAM Managed Policy: Athena con privilegio mínimo ────────────────────
+  AthenaQueryPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: "Ejecutar queries de HardTech en Athena y acceder solo al catálogo y paths S3 del proyecto."
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: UseHardTechWorkGroup
+            Effect: Allow
+            Action:
+              - athena:StartQueryExecution
+              - athena:StopQueryExecution
+              - athena:GetQueryExecution
+              - athena:GetQueryResults
+              - athena:GetQueryResultsStream
+              - athena:GetWorkGroup
+              - athena:ListQueryExecutions
+            Resource: !Sub "arn:${AWS::Partition}:athena:${AWS::Region}:${AWS::AccountId}:workgroup/${AthenaWorkGroupName}"
+          - Sid: ReadHardTechCatalog
+            Effect: Allow
+            Action:
+              - glue:GetDatabase
+              - glue:GetDatabases
+              - glue:GetTable
+              - glue:GetTables
+              - glue:GetPartition
+              - glue:GetPartitions
+              - glue:BatchGetPartition
+            Resource:
+              - !Sub "arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:catalog"
+              - !Sub "arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:database/${GlueDatabaseName}"
+              - !Sub "arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:table/${GlueDatabaseName}/*"
+          - Sid: InspectDataLakeBucket
+            Effect: Allow
+            Action:
+              - s3:GetBucketLocation
+              - s3:ListBucketMultipartUploads
+            Resource: !Sub "arn:${AWS::Partition}:s3:::${DataLakeBucketName}"
+          - Sid: ListAnalyticalPrefixes
+            Effect: Allow
+            Action: s3:ListBucket
+            Resource: !Sub "arn:${AWS::Partition}:s3:::${DataLakeBucketName}"
+            Condition:
+              StringLike:
+                s3:prefix:
+                  - "raw/events/*"
+                  - "processed/snapshots/*"
+                  - "athena-results/*"
+          - Sid: ReadAnalyticalData
+            Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:GetObjectVersion
+            Resource:
+              - !Sub "arn:${AWS::Partition}:s3:::${DataLakeBucketName}/raw/events/*"
+              - !Sub "arn:${AWS::Partition}:s3:::${DataLakeBucketName}/processed/snapshots/*"
+          - Sid: ManageQueryResults
+            Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+              - s3:AbortMultipartUpload
+              - s3:ListMultipartUploadParts
+            Resource: !Sub "arn:${AWS::Partition}:s3:::${DataLakeBucketName}/athena-results/*"
+
+# ---------------------------------------------------------------------------
+# Outputs
+# ---------------------------------------------------------------------------
+Outputs:
+
+  # ── Seguridad ─────────────────────────────────────────────────────────────
+  SGVPCLinkId:
+    Description: "Security Group del VPC Link"
+    Value: !Ref SGVPCLink
+
+  SGALBId:
+    Description: "Security Group del ALB"
+    Value: !Ref SGALB
+    Export:
+      Name: !Sub "${ProjectName}-sg-alb"
+
+  SGAppId:
+    Description: "Security Group de las VMs de aplicación"
+    Value: !Ref SGApp
+    Export:
+      Name: !Sub "${ProjectName}-sg-app"
+
+  SGDataId:
+    Description: "Security Group de la VM de datos"
+    Value: !Ref SGData
+    Export:
+      Name: !Sub "${ProjectName}-sg-data"
+
+  # ── EC2 ───────────────────────────────────────────────────────────────────
+  App1PrivateIP:
+    Description: "IP privada de App 1"
+    Value: !GetAtt AppInstance1.PrivateIp
+
+  App2PrivateIP:
+    Description: "IP privada de App 2"
+    Value: !GetAtt AppInstance2.PrivateIp
+
+  DataPrivateIP:
+    Description: "IP privada de la VM de datos — usar como DB_HOST en .env.app"
+    Value: !GetAtt DataInstance.PrivateIp
+    Export:
+      Name: !Sub "${ProjectName}-data-private-ip"
+
+  # ── ALB ───────────────────────────────────────────────────────────────────
+  ALBArn:
+    Description: "ARN del ALB interno"
+    Value: !Ref ALB
+
+  ALBDNSName:
+    Description: "DNS del ALB interno"
+    Value: !GetAtt ALB.DNSName
+    Export:
+      Name: !Sub "${ProjectName}-alb-dns"
+
+  # ── API Gateway ───────────────────────────────────────────────────────────
+  ApiEndpoint:
+    Description: "Endpoint HTTPS público de API Gateway (Fase 5)"
+    Value: !Sub "https://${HttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+    Export:
+      Name: !Sub "${ProjectName}-api-endpoint"
+
+  HttpApiId:
+    Description: "ID del HTTP API"
+    Value: !Ref HttpApi
+
+  VPCLinkId:
+    Description: "ID del VPC Link v2"
+    Value: !Ref VPCLink
+
+  # ── Subredes (para referencia en Fase 5/6) ────────────────────────────────
+  AppSubnet1Out:
+    Description: "Subred 1 — usada por VPC Link y ALB"
+    Value: !Ref AppSubnet1Id
+    Export:
+      Name: !Sub "${ProjectName}-subnet-1"
+
+  AppSubnet2Out:
+    Description: "Subred 2 — usada por VPC Link y ALB"
+    Value: !Ref AppSubnet2Id
+    Export:
+      Name: !Sub "${ProjectName}-subnet-2"
+
+  # ── Fase 7: Analytics ─────────────────────────────────────────────────────
+  DataLakeBucketNameOut:
+    Description: "Nombre del bucket S3 data lake"
+    Value: !Ref DataLakeBucket
+    Export:
+      Name: !Sub "${ProjectName}-datalake-bucket"
+
+  GlueDatabaseNameOut:
+    Description: "Nombre de la base de datos en el Glue Data Catalog"
+    Value: !Ref GlueDatabase
+    Export:
+      Name: !Sub "${ProjectName}-glue-db"
+
+  GlueCrawlerRoleArn:
+    Description: "ARN del rol IAM de los Glue crawlers"
+    Value: !GetAtt GlueCrawlerRole.Arn
+
+  SnapshotsCrawlerNameOut:
+    Description: "Nombre del crawler de snapshots Parquet"
+    Value: !Ref SnapshotsCrawler
+
+  EventsCrawlerNameOut:
+    Description: "Nombre del crawler de eventos JSON"
+    Value: !Ref EventsCrawler
+
+  AthenaWorkGroupNameOut:
+    Description: "Nombre del Athena workgroup"
+    Value: !Ref AthenaWorkGroup
+    Export:
+      Name: !Sub "${ProjectName}-athena-workgroup"
+
+  AthenaOutputLocation:
+    Description: "Ubicación S3 de resultados de Athena"
+    Value: !Sub "s3://${DataLakeBucketName}/athena-results/"
+
+  AthenaQueryPolicyArn:
+    Description: "ARN de la managed policy de Athena — adjuntar a roles adicionales si hace falta"
+    Value: !Ref AthenaQueryPolicy

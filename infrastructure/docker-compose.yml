@@ -1,0 +1,95 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: hardtech-postgres
+    environment:
+      POSTGRES_DB: hardtech_catalog
+      POSTGRES_USER: hardtech
+      POSTGRES_PASSWORD: hardtech
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hardtech -d hardtech_catalog"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - hardtech-net
+
+  mysql:
+    image: mysql:8.0
+    container_name: hardtech-mysql
+    environment:
+      MYSQL_DATABASE: hardtech_orders
+      MYSQL_USER: hardtech
+      MYSQL_PASSWORD: hardtech
+      MYSQL_ROOT_PASSWORD: root
+    ports:
+      - "3306:3306"
+    command: --default-authentication-plugin=mysql_native_password
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./mysql/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - hardtech-net
+
+  mongodb:
+    image: mongo:7.0
+    container_name: hardtech-mongodb
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: root
+      MONGO_INITDB_DATABASE: hardtech_identity
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+      - ./mongodb/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--username", "root", "--password", "root", "--authenticationDatabase", "admin", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - hardtech-net
+
+  localstack:
+    image: localstack/localstack:3.8
+    container_name: hardtech-localstack
+    environment:
+      SERVICES: s3
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      DEBUG: 1
+    ports:
+      - "4566:4566"
+    volumes:
+      - ./localstack/init:/etc/localstack/init/ready.d
+      - localstack_data:/var/lib/localstack
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD", "bash", "-c", "awslocal s3 ls >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+    networks:
+      - hardtech-net
+
+volumes:
+  postgres_data:
+  mysql_data:
+  mongodb_data:
+  localstack_data:
+
+networks:
+  hardtech-net:
+    name: hardtech-net

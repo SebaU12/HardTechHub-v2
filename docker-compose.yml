@@ -1,0 +1,308 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: hardtech_catalog
+      POSTGRES_USER: hardtech
+      POSTGRES_PASSWORD: hardtech
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infrastructure/postgres/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hardtech -d hardtech_catalog"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - hardtech-net
+
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_DATABASE: hardtech_orders
+      MYSQL_USER: hardtech
+      MYSQL_PASSWORD: hardtech
+      MYSQL_ROOT_PASSWORD: root
+    command: --default-authentication-plugin=mysql_native_password
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./infrastructure/mysql/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - hardtech-net
+
+  mongodb:
+    image: mongo:7.0
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: root
+      MONGO_INITDB_DATABASE: hardtech_identity
+    volumes:
+      - mongodb_data:/data/db
+      - ./infrastructure/mongodb/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--username", "root", "--password", "root", "--authenticationDatabase", "admin", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - hardtech-net
+
+  localstack:
+    image: localstack/localstack:3.8
+    environment:
+      SERVICES: s3
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      DEBUG: 1
+    volumes:
+      - ./infrastructure/localstack/init:/etc/localstack/init/ready.d
+      - localstack_data:/var/lib/localstack
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD", "bash", "-c", "awslocal s3 ls >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+    networks:
+      - hardtech-net
+
+  identity-service:
+    build:
+      context: ./services/identity-service
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      MONGODB_URI: mongodb://hardtech:hardtech@mongodb:27017/hardtech_identity?authSource=hardtech_identity
+      MONGODB_DATABASE: hardtech_identity
+      MONGODB_USERS_COLLECTION: users
+      S3_ENDPOINT_URL: http://localstack:4566
+      S3_BUCKET: hardtech-datalake
+      S3_EVENTS_PREFIX: raw/events/identity/
+    ports:
+      - "8001:8001"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+    networks:
+      - hardtech-net
+
+  catalog-service:
+    build:
+      context: ./services/catalog-service
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: hardtech_catalog
+      POSTGRES_USER: hardtech
+      POSTGRES_PASSWORD: hardtech
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      S3_ENDPOINT_URL: http://localstack:4566
+      S3_BUCKET: hardtech-datalake
+      S3_EVENTS_PREFIX: raw/events/catalog/
+    ports:
+      - "8002:8002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+    networks:
+      - hardtech-net
+
+  order-service:
+    build:
+      context: ./services/order-service
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: hardtech_orders
+      MYSQL_USER: hardtech
+      MYSQL_PASSWORD: hardtech
+      CATALOG_SERVICE_URL: http://catalog-service:8002
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      S3_ENDPOINT_URL: http://localstack:4566
+      S3_BUCKET: hardtech-datalake
+      S3_EVENTS_PREFIX: raw/events/orders/
+    ports:
+      - "8003:8003"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      catalog-service:
+        condition: service_started
+      localstack:
+        condition: service_healthy
+    networks:
+      - hardtech-net
+
+  compatibility-service:
+    build:
+      context: ./services/compatibility-service
+    environment:
+      CATALOG_SERVICE_URL: http://catalog-service:8002
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      S3_ENDPOINT_URL: http://localstack:4566
+      S3_BUCKET: hardtech-datalake
+      S3_EVENTS_PREFIX: raw/events/compatibility/
+    ports:
+      - "8004:8004"
+    depends_on:
+      catalog-service:
+        condition: service_started
+      localstack:
+        condition: service_healthy
+    networks:
+      - hardtech-net
+
+  analytics-service:
+    build:
+      context: .
+      dockerfile: services/analytics-service/Dockerfile
+    environment:
+      ANALYTICS_BACKEND: s3
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      S3_ENDPOINT_URL: http://localstack:4566
+      S3_BUCKET: hardtech-datalake
+      S3_EVENTS_PREFIX: raw/events/
+      ATHENA_DATABASE: hardtech_analytics
+      ATHENA_WORKGROUP: hardtech-workgroup
+      ATHENA_OUTPUT_LOCATION: s3://hardtech-datalake/athena-results/
+      ATHENA_QUERIES_DIR: /app/queries
+      ATHENA_QUERY_TIMEOUT_SECONDS: "30"
+      ATHENA_POLL_INTERVAL_SECONDS: "0.5"
+    ports:
+      - "8005:8005"
+    depends_on:
+      localstack:
+        condition: service_healthy
+    networks:
+      - hardtech-net
+
+  ingestor:
+    build:
+      context: ./ingestion
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      S3_ENDPOINT_URL: http://localstack:4566
+      S3_BUCKET: hardtech-datalake
+      S3_EVENTS_PREFIX: raw/events/navigation/
+      S3_PROCESSED_PREFIX: processed/events/navigation/
+      BATCH_SIZE: "10"
+      INTERVAL_SECONDS: "30"
+    depends_on:
+      localstack:
+        condition: service_healthy
+    networks:
+      - hardtech-net
+    restart: unless-stopped
+
+  catalog-ingestor:
+    build:
+      context: ./ingestion
+    command: ["python", "catalog_ingestor.py"]
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      S3_ENDPOINT_URL: http://localstack:4566
+      S3_BUCKET: hardtech-datalake
+      S3_OUTPUT_PREFIX: processed/snapshots/products/
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: hardtech_catalog
+      POSTGRES_USER: hardtech
+      POSTGRES_PASSWORD: hardtech
+      RUN_ONCE: "false"
+      SNAPSHOT_INTERVAL_SECONDS: "300"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+    networks:
+      - hardtech-net
+    restart: unless-stopped
+
+  orders-ingestor:
+    build:
+      context: ./ingestion
+    command: ["python", "orders_ingestor.py"]
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      S3_ENDPOINT_URL: http://localstack:4566
+      S3_BUCKET: hardtech-datalake
+      S3_ORDERS_PREFIX: processed/snapshots/orders/
+      S3_ORDER_ITEMS_PREFIX: processed/snapshots/order_items/
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: hardtech_orders
+      MYSQL_USER: hardtech
+      MYSQL_PASSWORD: hardtech
+      RUN_ONCE: "false"
+      SNAPSHOT_INTERVAL_SECONDS: "300"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+    networks:
+      - hardtech-net
+    restart: unless-stopped
+
+  identity-ingestor:
+    build:
+      context: ./ingestion
+    command: ["python", "identity_ingestor.py"]
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      S3_ENDPOINT_URL: http://localstack:4566
+      S3_BUCKET: hardtech-datalake
+      S3_OUTPUT_PREFIX: processed/snapshots/users/
+      MONGODB_URI: mongodb://hardtech_reader:hardtech_reader@mongodb:27017/hardtech_identity?authSource=hardtech_identity
+      MONGODB_DATABASE: hardtech_identity
+      MONGODB_USERS_COLLECTION: users
+      MONGODB_BATCH_SIZE: "1000"
+      RUN_ONCE: "false"
+      SNAPSHOT_INTERVAL_SECONDS: "300"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+    networks:
+      - hardtech-net
+    restart: unless-stopped
+
+networks:
+  hardtech-net:
+    external: true
+    name: hardtech-net
+
+volumes:
+  postgres_data:
+  mysql_data:
+  mongodb_data:
+  localstack_data:
