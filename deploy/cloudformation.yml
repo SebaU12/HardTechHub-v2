@@ -225,7 +225,7 @@ Resources:
           chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
           ln -sf /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/bin/docker-compose
           # Clonar repositorio del proyecto
-          git clone https://github.com/SebaU12/Proyecto.git /home/ec2-user/app
+          git clone https://github.com/SebaU12/HardTechHub-v2.git /home/ec2-user/app
           chown -R ec2-user:ec2-user /home/ec2-user/app
           # Obtener INSTANCE_ID via IMDSv2
           TOKEN=$(curl -sX PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
@@ -263,7 +263,7 @@ Resources:
           chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
           ln -sf /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/bin/docker-compose
           # Clonar repositorio del proyecto
-          git clone https://github.com/SebaU12/Proyecto.git /home/ec2-user/app
+          git clone https://github.com/SebaU12/HardTechHub-v2.git /home/ec2-user/app
           chown -R ec2-user:ec2-user /home/ec2-user/app
           # Obtener INSTANCE_ID via IMDSv2
           TOKEN=$(curl -sX PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
@@ -303,7 +303,7 @@ Resources:
           chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
           ln -sf /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/bin/docker-compose
           # Clonar repositorio del proyecto
-          git clone https://github.com/SebaU12/Proyecto.git /home/ec2-user/app
+          git clone https://github.com/SebaU12/HardTechHub-v2.git /home/ec2-user/app
           chown -R ec2-user:ec2-user /home/ec2-user/app
       Tags:
         - Key: Name
