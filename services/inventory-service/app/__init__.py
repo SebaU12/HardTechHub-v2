@@ -1,0 +1,1 @@
+"""HardTech Inventory Service."""
