@@ -67,6 +67,7 @@ Prefijos por productor:
 | Order Service | `raw/events/orders/` |
 | Compatibility Service | `raw/events/compatibility/` |
 | Ingestor de navegación | `raw/events/navigation/` |
+| Inventory Service | `raw/events/inventory/` |
 
 Analytics utiliza `raw/events/` como prefijo raíz y, por tanto, descubre recursivamente todos los dominios.
 
@@ -248,6 +249,30 @@ Estado: **implementado**.
 
 No contiene `email`, `password_hash` ni el JWT. Si S3 falla, el usuario
 permanece registrado y la respuesta informa `event_published: false`.
+
+## Eventos de inventario
+
+Estado: **implementados**.
+
+| Evento | Momento |
+|---|---|
+| `STOCK_ADJUSTED` | Después de crear o modificar stock físico |
+| `STOCK_RESERVED` | Después de reservar atómicamente todos los productos |
+| `STOCK_CONFIRMED` | Después de confirmar la venta y descontar stock físico |
+| `STOCK_RELEASED` | Después de liberar una reserva activa |
+| `RESERVATION_EXPIRED` | Después de que el expirador libera una reserva vencida |
+| `STOCK_RESTORED` | Después de cancelar una venta confirmada y restaurar unidades |
+| `LOW_STOCK_DETECTED` | Cuando el stock vendible cruza el mínimo configurado |
+
+Los eventos de reserva incluyen `reservation_id`, estado, vencimiento e ítems
+en `payload`. Los ajustes incluyen cantidades anterior/posterior, delta, stock
+vendible, mínimo y motivo. `LOW_STOCK_DETECTED` usa `product_id` en el sobre y
+conserva las cantidades que provocaron la detección.
+
+La publicación ocurre después del commit PostgreSQL. Un error S3 no revierte
+la operación y se refleja como `event_published: false`. Las repeticiones
+idempotentes de reserva, confirmación, liberación o restauración no vuelven a
+publicar el hecho ya registrado. El prefijo es `raw/events/inventory/`.
 
 ## Variables de entorno
 

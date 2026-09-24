@@ -117,6 +117,13 @@ class AthenaBackendTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             load_named_query("../../unsafe")
 
+    def test_inventory_queries_are_versioned_and_use_latest_snapshot(self):
+        summary = load_named_query("inventory_summary")
+        low_stock = load_named_query("inventory_low_stock")
+        self.assertIn("MAX(snapshot_at)", summary)
+        self.assertIn("MAX(snapshot_at)", low_stock)
+        self.assertIn("low_stock", low_stock)
+
 
 if __name__ == "__main__":
     unittest.main()

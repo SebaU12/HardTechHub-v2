@@ -18,6 +18,9 @@ class StockResponse(BaseModel):
     minimum_quantity: int
     low_stock: bool
     updated_at: datetime
+    event_published: bool | None = None
+    event_key: str | None = None
+    event_keys: list[str] | None = None
 
 
 class LowStockResponse(BaseModel):
@@ -77,6 +80,9 @@ class ReservationResponse(BaseModel):
     expires_at: datetime
     order_id: int | None = None
     items: list[ReservationItemResponse]
+    event_published: bool | None = None
+    event_key: str | None = None
+    event_keys: list[str] | None = None
 
 
 class ConfirmReservationRequest(BaseModel):

@@ -88,7 +88,7 @@ class InventoryRepository:
         quantity_delta: int,
         minimum_quantity: int | None,
         reason: str,
-    ) -> dict[str, Any]:
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         with self.db.connection() as conn, conn.transaction(), conn.cursor() as cursor:
             cursor.execute("SELECT pg_advisory_xact_lock(%s)", (product_id,))
             cursor.execute(
@@ -106,6 +106,7 @@ class InventoryRepository:
                         product_id=product_id,
                     )
                 before = 0
+                before_low_stock = False
                 after = quantity_delta
                 minimum = minimum_quantity if minimum_quantity is not None else 0
                 cursor.execute(
@@ -120,6 +121,9 @@ class InventoryRepository:
             else:
                 movement_type = "MANUAL_ADJUSTMENT"
                 before = row["available_quantity"]
+                before_low_stock = (
+                    before - row["reserved_quantity"] <= row["minimum_quantity"]
+                )
                 after = before + quantity_delta
                 if after < 0:
                     raise InventoryError(
@@ -155,14 +159,24 @@ class InventoryRepository:
                 """,
                 (product_id, movement_type, quantity_delta, before, after, reason),
             )
-        return _stock_response(updated)
+        stock = _stock_response(updated)
+        event_context = {
+            "quantity_delta": quantity_delta,
+            "quantity_before": before,
+            "quantity_after": after,
+            "reason": reason,
+            "became_low_stock": (
+                stock["low_stock"] and not before_low_stock
+            ),
+        }
+        return stock, event_context
 
     def create_reservation(
         self,
         idempotency_key: str,
         user_id: str,
         items: list[dict[str, int]],
-    ) -> tuple[dict[str, Any], bool]:
+    ) -> tuple[dict[str, Any], bool, list[dict[str, Any]]]:
         request_hash = reservation_request_hash(user_id, items)
         reservation_id = uuid4()
         expires_at = datetime.now(timezone.utc) + timedelta(
@@ -181,7 +195,7 @@ class InventoryRepository:
                         "IDEMPOTENCY_KEY_REUSED",
                         "Idempotency key was already used with a different request",
                     )
-                return self._reservation_with_items(cursor, existing), False
+                return self._reservation_with_items(cursor, existing), False, []
 
             product_ids = [item["product_id"] for item in items]
             cursor.execute(
@@ -202,6 +216,7 @@ class InventoryRepository:
                     product_ids=missing,
                 )
             insufficient = []
+            low_stock_products = []
             for item in items:
                 stock = stocks[item["product_id"]]
                 sellable = stock["available_quantity"] - stock["reserved_quantity"]
@@ -231,6 +246,8 @@ class InventoryRepository:
             )
             reservation = cursor.fetchone()
             for item in items:
+                stock = stocks[item["product_id"]]
+                before_sellable = stock["available_quantity"] - stock["reserved_quantity"]
                 cursor.execute(
                     """
                     INSERT INTO inventory_reservation_items (reservation_id, product_id, quantity)
@@ -247,7 +264,18 @@ class InventoryRepository:
                     """,
                     (item["quantity"], item["product_id"]),
                 )
-        return self._format_reservation(reservation, items), True
+                after_sellable = before_sellable - item["quantity"]
+                if before_sellable > stock["minimum_quantity"] and after_sellable <= stock["minimum_quantity"]:
+                    low_stock_products.append(
+                        {
+                            "product_id": item["product_id"],
+                            "available_quantity": stock["available_quantity"],
+                            "reserved_quantity": stock["reserved_quantity"] + item["quantity"],
+                            "sellable_quantity": after_sellable,
+                            "minimum_quantity": stock["minimum_quantity"],
+                        }
+                    )
+        return self._format_reservation(reservation, items), True, low_stock_products
 
     def get_reservation(self, reservation_id: UUID) -> dict[str, Any]:
         with self.db.connection() as conn, conn.cursor() as cursor:
@@ -257,7 +285,7 @@ class InventoryRepository:
                 raise not_found("RESERVATION_NOT_FOUND", "Reservation was not found")
             return self._reservation_with_items(cursor, reservation)
 
-    def confirm_reservation(self, reservation_id: UUID, order_id: int) -> dict[str, Any]:
+    def confirm_reservation(self, reservation_id: UUID, order_id: int) -> tuple[dict[str, Any], bool]:
         with self.db.connection() as conn, conn.transaction(), conn.cursor() as cursor:
             reservation = self._locked_reservation(cursor, reservation_id)
             if reservation["status"] == "CONFIRMED":
@@ -266,7 +294,7 @@ class InventoryRepository:
                         "RESERVATION_ORDER_CONFLICT",
                         "Reservation is associated with another order",
                     )
-                return self._reservation_with_items(cursor, reservation)
+                return self._reservation_with_items(cursor, reservation), False
             if reservation["status"] != "ACTIVE":
                 raise conflict("RESERVATION_NOT_ACTIVE", "Reservation is not active")
             if reservation["expires_at"] <= datetime.now(timezone.utc):
@@ -319,13 +347,13 @@ class InventoryRepository:
                 (order_id, reservation_id),
             )
             updated = cursor.fetchone()
-        return self._format_reservation(updated, items)
+        return self._format_reservation(updated, items), True
 
-    def release_reservation(self, reservation_id: UUID) -> dict[str, Any]:
+    def release_reservation(self, reservation_id: UUID) -> tuple[dict[str, Any], bool]:
         with self.db.connection() as conn, conn.transaction(), conn.cursor() as cursor:
             reservation = self._locked_reservation(cursor, reservation_id)
             if reservation["status"] == "RELEASED":
-                return self._reservation_with_items(cursor, reservation)
+                return self._reservation_with_items(cursor, reservation), False
             if reservation["status"] == "CONFIRMED" or reservation["status"] == "CANCELLED":
                 raise conflict(
                     "RESERVATION_ALREADY_CONFIRMED",
@@ -344,9 +372,11 @@ class InventoryRepository:
                 (reservation_id,),
             )
             updated = cursor.fetchone()
-        return self._format_reservation(updated, items)
+        return self._format_reservation(updated, items), True
 
-    def cancel_reservation(self, reservation_id: UUID, order_id: int, reason: str) -> dict[str, Any]:
+    def cancel_reservation(
+        self, reservation_id: UUID, order_id: int, reason: str
+    ) -> tuple[dict[str, Any], bool]:
         with self.db.connection() as conn, conn.transaction(), conn.cursor() as cursor:
             reservation = self._locked_reservation(cursor, reservation_id)
             if reservation["order_id"] is not None and reservation["order_id"] != order_id:
@@ -355,7 +385,7 @@ class InventoryRepository:
                     "Reservation is associated with another order",
                 )
             if reservation["status"] == "CANCELLED":
-                return self._reservation_with_items(cursor, reservation)
+                return self._reservation_with_items(cursor, reservation), False
             if reservation["status"] != "CONFIRMED":
                 raise conflict(
                     "RESERVATION_NOT_CONFIRMED",
@@ -397,10 +427,10 @@ class InventoryRepository:
                 (reservation_id,),
             )
             updated = cursor.fetchone()
-        return self._format_reservation(updated, items)
+        return self._format_reservation(updated, items), True
 
-    def expire_reservations(self, batch_size: int = 50) -> list[UUID]:
-        expired_ids: list[UUID] = []
+    def expire_reservations(self, batch_size: int = 50) -> list[dict[str, Any]]:
+        expired_reservations: list[dict[str, Any]] = []
         with self.db.connection() as conn, conn.transaction(), conn.cursor() as cursor:
             cursor.execute(
                 """
@@ -425,8 +455,14 @@ class InventoryRepository:
                     """,
                     (reservation_id,),
                 )
-                expired_ids.append(reservation_id)
-        return expired_ids
+                expired_reservations.append(
+                    {
+                        "reservation": self._format_reservation(reservation, items)
+                        | {"status": "EXPIRED"},
+                        "user_id": reservation["user_id"],
+                    }
+                )
+        return expired_reservations
 
     @staticmethod
     def _locked_reservation(cursor: Any, reservation_id: UUID) -> dict[str, Any]:
@@ -494,4 +530,5 @@ class InventoryRepository:
             "expires_at": reservation["expires_at"],
             "order_id": reservation["order_id"],
             "items": items,
+            "_user_id": reservation["user_id"],
         }

@@ -64,11 +64,57 @@ class AnalyticsApiTests(unittest.TestCase):
             "/api/analytics/compatibility/summary",
             "/api/analytics/users/registrations",
             "/api/analytics/funnel",
+            "/api/analytics/inventory/summary",
+            "/api/analytics/inventory/low-stock",
         }
         self.assertTrue(expected.issubset(schema["paths"]))
         for path in expected:
             example = schema["paths"][path]["get"]["responses"]["200"]["content"]["application/json"].get("example")
             self.assertIsNotNone(example, path)
+
+    def test_inventory_summary_maps_athena_metadata(self):
+        result = AthenaQueryResult(
+            rows=[
+                {
+                    "total_products": 5,
+                    "physical_units": 40,
+                    "reserved_units": 4,
+                    "sellable_units": 36,
+                    "low_stock_products": 1,
+                    "snapshot_at": "2026-09-23 16:00:00.000",
+                }
+            ],
+            execution_id="query-inventory-summary",
+            duration_ms=31,
+        )
+        with patch.dict(os.environ, {"ANALYTICS_BACKEND": "athena"}), patch(
+            "app.main.execute_named_query", return_value=result
+        ) as execute:
+            response = main.inventory_summary()
+        execute.assert_called_once_with("inventory_summary")
+        self.assertEqual(response["inventory_summary"]["sellable_units"], 36)
+        self.assertEqual(response["backend"], "athena")
+        self.assertEqual(response["query_execution_id"], "query-inventory-summary")
+        self.assertEqual(response["duration_ms"], 31)
+
+    def test_inventory_low_stock_maps_rows_and_requires_athena(self):
+        result = AthenaQueryResult(
+            rows=[{"product_id": 7, "sellable_quantity": 2, "minimum_quantity": 2}],
+            execution_id="query-inventory-low",
+            duration_ms=19,
+        )
+        with patch.dict(os.environ, {"ANALYTICS_BACKEND": "athena"}), patch(
+            "app.main.execute_named_query", return_value=result
+        ):
+            response = main.inventory_low_stock()
+        self.assertEqual(response["low_stock"], result.rows)
+        self.assertEqual(response["backend"], "athena")
+        self.assertEqual(response["query_execution_id"], "query-inventory-low")
+
+        with patch.dict(os.environ, {"ANALYTICS_BACKEND": "s3"}):
+            with self.assertRaises(HTTPException) as raised:
+                main.inventory_low_stock()
+        self.assertEqual(raised.exception.status_code, 503)
 
 
 if __name__ == "__main__":

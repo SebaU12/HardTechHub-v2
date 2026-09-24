@@ -30,3 +30,26 @@ INVENTORY_TEST_DATABASE_URL=postgresql://user:password@localhost:5432/database \
 ```
 
 The test drops only the randomly named schema it created.
+
+## Inventory events
+
+Every successful stock mutation publishes its domain event after the
+PostgreSQL transaction commits. Objects are written under:
+
+```text
+raw/events/inventory/year=YYYY/month=MM/day=DD/
+```
+
+The service emits `STOCK_ADJUSTED`, `STOCK_RESERVED`, `STOCK_CONFIRMED`,
+`STOCK_RELEASED`, `RESERVATION_EXPIRED`, `STOCK_RESTORED` and
+`LOW_STOCK_DETECTED`. An idempotent replay that does not apply a new transition
+does not publish another event.
+
+Mutation responses include `event_published`, `event_key` and `event_keys`.
+An S3 failure is reported as `event_published: false` but never rolls back the
+committed inventory change. This MVP intentionally has no transactional
+outbox, so a failed publication is logged for operational follow-up.
+
+Configure `S3_BUCKET`, `S3_EVENTS_PREFIX`, `AWS_DEFAULT_REGION` and, for local
+development only, `S3_ENDPOINT_URL` and static AWS credentials. AWS deployments
+use the instance role.

@@ -22,6 +22,8 @@ QUERY_FILES = {
     "compatibility_summary": "07_compatible_build_rate.sql",
     "user_registrations": "08_user_registrations_by_day.sql",
     "funnel": "09_view_compatibility_order_funnel.sql",
+    "inventory_summary": "10_inventory_summary.sql",
+    "inventory_low_stock": "11_inventory_low_stock.sql",
 }
 
 
@@ -59,10 +61,11 @@ def get_queries_dir() -> Path:
         return Path(configured).resolve()
 
     module_path = Path(__file__).resolve()
-    candidates = [
-        module_path.parents[1] / "queries",
-        module_path.parents[3] / "infrastructure" / "athena" / "queries",
-    ]
+    candidates = [module_path.parents[1] / "queries"]
+    if len(module_path.parents) > 3:
+        candidates.append(
+            module_path.parents[3] / "infrastructure" / "athena" / "queries"
+        )
     return next((path for path in candidates if path.is_dir()), candidates[0])
 
 
