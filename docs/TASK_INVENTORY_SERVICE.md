@@ -241,13 +241,13 @@ con stock insuficiente no produce reservas parciales.
 
 ### Fase 3 — Integración con Order Service
 
-- [ ] Agregar `INVENTORY_SERVICE_URL` a la configuración de Orders.
-- [ ] Reservar inventario antes de insertar el pedido.
-- [ ] Confirmar la reserva después de obtener `order_id`.
-- [ ] Liberar la reserva cuando falle la transacción de MySQL.
-- [ ] Implementar timeout y traducción de errores (`409`, `502`, `503`).
-- [ ] Evitar pedidos duplicados mediante una clave de idempotencia.
-- [ ] Probar reintentos de confirmación sin doble descuento.
+- [x] Agregar `INVENTORY_SERVICE_URL` a la configuración de Orders.
+- [x] Reservar inventario antes de insertar el pedido.
+- [x] Confirmar la reserva después de obtener `order_id`.
+- [x] Liberar la reserva cuando falle la transacción de MySQL.
+- [x] Implementar timeout y traducción de errores (`409`, `502`, `503`).
+- [x] Evitar pedidos duplicados mediante una clave de idempotencia.
+- [x] Probar reintentos de confirmación sin doble descuento.
 
 **Criterio de salida:** nunca se crea un pedido exitoso si no existe stock
 suficiente, y dos compras simultáneas no pueden vender la misma última unidad.

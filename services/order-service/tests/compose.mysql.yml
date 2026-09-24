@@ -1,0 +1,29 @@
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_DATABASE: hardtech_orders
+      MYSQL_USER: hardtech
+      MYSQL_PASSWORD: hardtech
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_READER_USER: hardtech_reader
+      MYSQL_READER_PASSWORD: hardtech_reader
+    command: --default-authentication-plugin=mysql_native_password
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ../../../infrastructure/mysql/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - hardtech-net
+
+networks:
+  hardtech-net:
+    external: true
+    name: hardtech-net
+
+volumes:
+  mysql_data:
