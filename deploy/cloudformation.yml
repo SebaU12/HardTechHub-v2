@@ -147,10 +147,10 @@ Resources:
       GroupDescription: "HardTech VMs app - servicios desde ALB y SSH desde VPC"
       VpcId: !Ref VpcId
       SecurityGroupIngress:
-        - Description: "Seis APIs desde ALB"
+        - Description: "Cinco APIs base desde ALB"
           IpProtocol: tcp
           FromPort: 8001
-          ToPort: 8006
+          ToPort: 8005
           SourceSecurityGroupId: !Ref SGALB
         - Description: "SSH admin"
           IpProtocol: tcp
@@ -160,6 +160,18 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub "${ProjectName}-sg-app"
+
+  # Regla separada para Inventory. Mantenerla fuera de SGApp evita que una
+  # actualización del rango inline propague cambios condicionales a las EC2.
+  SGAppInventoryIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref SGApp
+      Description: "Inventory API desde ALB"
+      IpProtocol: tcp
+      FromPort: 8006
+      ToPort: 8006
+      SourceSecurityGroupId: !Ref SGALB
 
   # VM de datos: puertos de BD solo desde VMs de aplicación
   SGData:
@@ -288,7 +300,6 @@ Resources:
       ImageId: !Ref AMI
       InstanceType: !Ref DataInstanceType
       KeyName: !Ref KeyName
-      IamInstanceProfile: !Ref LabInstanceProfileName
       BlockDeviceMappings:
         - DeviceName: /dev/sda1
           Ebs:

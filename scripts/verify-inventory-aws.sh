@@ -111,7 +111,16 @@ for INSTANCE_ID in "$APP1_ID" "$APP2_ID" "$DATA_ID"; do
     --query 'Volumes[*].[VolumeId,Size,VolumeType,State]' \
     --output table
 
-  run_ssm "$INSTANCE_ID" "capacity" "$CAPACITY_COMMAND"
+  SSM_STATUS=$(aws ssm describe-instance-information \
+    --filters "Key=InstanceIds,Values=$INSTANCE_ID" \
+    --region "$REGION" \
+    --query 'InstanceInformationList[0].PingStatus' \
+    --output text 2>/dev/null || true)
+  if [[ "$SSM_STATUS" == "Online" ]]; then
+    run_ssm "$INSTANCE_ID" "capacity" "$CAPACITY_COMMAND"
+  else
+    echo "AVISO: $INSTANCE_ID no está administrada por SSM; revise memoria y df -h por SSH."
+  fi
 done
 
-echo "OK phase=5 targets_healthy=2 api_gateway=true health_checks=true capacity_reviewed=true"
+echo "OK phase=5 targets_healthy=2 api_gateway=true health_checks=true cloudwatch_ebs_reviewed=true"

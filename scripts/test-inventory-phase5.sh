@@ -71,7 +71,12 @@ resources = template["Resources"]
 
 ingress = resources["SGApp"]["Properties"]["SecurityGroupIngress"]
 api_ingress = next(rule for rule in ingress if rule.get("FromPort") == 8001)
-assert api_ingress["ToPort"] == 8006
+assert api_ingress["ToPort"] == 8005
+inventory_ingress = resources["SGAppInventoryIngress"]["Properties"]
+assert inventory_ingress["GroupId"] == "SGApp"
+assert inventory_ingress["FromPort"] == 8006
+assert inventory_ingress["ToPort"] == 8006
+assert inventory_ingress["SourceSecurityGroupId"] == "SGALB"
 
 target = resources["TGInventory"]["Properties"]
 assert target["Port"] == 8006
@@ -100,7 +105,7 @@ priorities = [
     if resource.get("Type") == "AWS::ElasticLoadBalancingV2::ListenerRule"
 ]
 assert len(priorities) == len(set(priorities)), "ALB listener priorities must be unique"
-assert resources["DataInstance"]["Properties"]["IamInstanceProfile"] == "LabInstanceProfileName"
+assert "IamInstanceProfile" not in resources["DataInstance"]["Properties"]
 assert template["Outputs"]["InventoryTargetGroupArn"]["Value"] == "TGInventory"
 
 setup_app = Path("scripts/setup-app.sh").read_text()

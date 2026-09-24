@@ -38,12 +38,12 @@ confirme la actualización. Espere a que el estado sea
 
 La actualización:
 
-- amplía `SGApp` a `8001–8006`;
+- agrega una regla independiente en `SGApp` para el puerto `8006`, sin
+  modificar ni reemplazar las EC2 existentes;
 - crea `hardtech-tg-inventory` con ambas App VM en `8006`;
 - enruta `/api/inventory*` con prioridad `60`;
 - enruta `/inventory/docs*` y `/inventory/openapi.json` con prioridad `61`;
-- expone IDs de las tres EC2 y el ARN del target group como outputs;
-- asocia el perfil de instancia a la Data VM para comprobaciones mediante SSM.
+- expone IDs de las tres EC2 y el ARN del target group como outputs.
 
 ## 3. Actualizar las dos App VM
 
