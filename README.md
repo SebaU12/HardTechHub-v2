@@ -574,6 +574,7 @@ Estas observaciones están desarrolladas y priorizadas en [Arquitectura técnica
 - [Diagrama entidad–relación y diccionario de datos](docs/DIAGRAMA_ENTIDAD_RELACION.md)
 - [Plan del microservicio de inventario](docs/TASK_INVENTORY_SERVICE.md)
 - [Diseño aprobado del microservicio de inventario](docs/INVENTORY_DESIGN.md)
+- [Base de datos y seed de Inventory](docs/INVENTORY_DATABASE.md)
 - [Contratos de eventos](docs/EVENTS.md)
 - [Infraestructura local](infrastructure/README.md)
 - [Ejecución de ingesta batch en EC2](docs/EC2_INGESTION.md)

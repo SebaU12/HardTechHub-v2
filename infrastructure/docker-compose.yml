@@ -6,6 +6,11 @@ services:
       POSTGRES_DB: hardtech_catalog
       POSTGRES_USER: hardtech
       POSTGRES_PASSWORD: hardtech
+      POSTGRES_READER_USER: hardtech_reader
+      POSTGRES_READER_PASSWORD: hardtech_reader
+      INVENTORY_DB: hardtech_inventory
+      INVENTORY_DB_USER: hardtech_inventory
+      INVENTORY_DB_PASSWORD: hardtech_inventory
     ports:
       - "5432:5432"
     volumes:
