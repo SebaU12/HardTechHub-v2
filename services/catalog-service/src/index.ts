@@ -17,6 +17,38 @@ const pool = new Pool({
 
 const app = Fastify({ logger: true });
 
+const start = async () => {
+  const apiBaseUrl = process.env.API_BASE_URL?.trim() ?? "";
+
+  // Await Swagger before declaring application routes. The plugin listens to
+  // route registration hooks, so merely queueing it with app.register() is
+  // not enough to guarantee discovery.
+  await app.register(swagger, {
+    openapi: {
+      info: {
+        title: "Catalog Service",
+        description: "Gestión de productos, categorías y marcas de HardTech Hub",
+        version: "1.0.0",
+      },
+      servers: apiBaseUrl ? [{ url: apiBaseUrl, description: "API Gateway / Local" }] : [],
+      tags: [
+        { name: "health", description: "Estado del servicio" },
+        { name: "products", description: "Operaciones sobre productos" },
+      ],
+    },
+  });
+
+  await app.register(swaggerUi, {
+    routePrefix: "/catalog/docs",
+    uiConfig: { docExpansion: "list" },
+  });
+
+  app.get(
+    "/catalog/openapi.json",
+    { schema: { hide: true } },
+    async (_req, reply) => reply.send(app.swagger())
+  );
+
 // Health 
 app.get(
   "/health",
@@ -332,29 +364,6 @@ app.delete<{ Params: { id: string } }>(
     });
   }
 );
-
-const start = async () => {
-  const apiBaseUrl = process.env.API_BASE_URL?.trim() ?? "";
-
-  await app.register(swagger, {
-    openapi: {
-      info: {
-        title: "Catalog Service",
-        description: "Gestión de productos, categorías y marcas de HardTech Hub",
-        version: "1.0.0",
-      },
-      servers: apiBaseUrl ? [{ url: apiBaseUrl, description: "API Gateway / Local" }] : [],
-      tags: [
-        { name: "health", description: "Estado del servicio" },
-        { name: "products", description: "Operaciones sobre productos" },
-      ],
-    },
-  });
-
-  await app.register(swaggerUi, {
-    routePrefix: "/catalog/docs",
-    uiConfig: { docExpansion: "list" },
-  });
 
   try {
     await app.listen({ port: 8002, host: "0.0.0.0" });
