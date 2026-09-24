@@ -2,7 +2,7 @@
 
 ## 1. Propósito y alcance
 
-HardTech Hub separa un dominio de venta de componentes de PC en capacidades pequeñas e independientes: identidad, catálogo, pedidos, compatibilidad y analítica. El objetivo del MVP es demostrar:
+HardTech Hub separa un dominio de venta de componentes de PC en capacidades pequeñas e independientes: identidad, catálogo, pedidos, compatibilidad, inventario y analítica. El objetivo del MVP es demostrar:
 
 - microservicios implementados en Python, TypeScript y Go;
 - propiedad de datos por dominio;
@@ -11,7 +11,10 @@ HardTech Hub separa un dominio de venta de componentes de PC en capacidades pequ
 - un data lake con capas raw y processed catalogadas mediante AWS Glue;
 - ejecución local reproducible con Docker Compose y LocalStack.
 
-La implementación actual no contiene frontend, API Gateway ni mecanismos productivos de seguridad y operación. Glue y Athena disponen de plantillas CloudFormation, consultas y scripts reproducibles, pero requieren despliegue y validación con credenciales de la cuenta del curso.
+El frontend vive en un repositorio separado y se publica en Amplify. Este
+repositorio contiene el backend, API Gateway, VPC Link, ALB, EC2, Glue y Athena
+declarados en CloudFormation. Sigue siendo una demostración académica y no un
+entorno productivo de seguridad y operación.
 
 ## 2. Contexto del sistema
 
@@ -35,6 +38,7 @@ flowchart LR
         O[Orders<br/>FastAPI]
         K[Compatibility<br/>net/http]
         A[Analytics<br/>FastAPI]
+        V[Inventory<br/>FastAPI]
     end
 
     I --> D[(MongoDB)]
@@ -43,17 +47,22 @@ flowchart LR
     C -->|PRODUCT_*| S
     O --> M[(MySQL)]
     O --> C
+    O -->|reserva, confirma y restaura| V
     O -->|ORDER_*| S
     K --> C
     K -->|COMPATIBILITY_CHECKED| S
+    V --> P
+    V -->|STOCK_* y RESERVATION_*| S
     A -->|backend local| S[(S3)]
     G[Navigation Ingestor] --> S
     P --> CB[Catalog Ingestor]
     M --> OB[Orders Ingestor]
     D --> IB[Identity Ingestor]
+    P --> VB[Inventory Ingestor]
     CB -->|products Parquet| S
     OB -->|orders + items Parquet| S
     IB -->|users sanitizados Parquet| S
+    VB -->|inventory Parquet| S
     S --> G[Glue Data Catalog]
     G --> T[Athena]
     A -->|backend AWS| T
@@ -65,11 +74,13 @@ flowchart LR
 | Catalog | Productos, categorías, marcas y specs | PostgreSQL, S3 |
 | Orders | Pedidos y snapshots de ítems | MySQL, Catalog, S3 |
 | Compatibility | Ninguno operacional | Catalog, S3 |
+| Inventory | Stock y reservas | PostgreSQL, Catalog, S3 |
 | Analytics | Ninguno propio; deriva métricas de eventos | S3 |
 | Navigation Ingestor | Ninguno local | S3 |
 | Catalog Ingestor | Ninguno local | PostgreSQL en lectura, S3 |
 | Orders Ingestor | Ninguno local | MySQL en lectura, S3 |
 | Identity Ingestor | Ninguno local | MongoDB mediante cursor por lotes, S3 |
+| Inventory Ingestor | Ninguno local | PostgreSQL en lectura, S3 |
 
 PostgreSQL, MySQL y LocalStack usan volúmenes Docker. Reiniciar contenedores conserva datos; eliminar los volúmenes reinicia el estado y vuelve a ejecutar los scripts de bootstrap.
 
@@ -108,12 +119,16 @@ Orders no mantiene claves foráneas distribuidas. `user_id` y `product_id` son r
 1. valida que la lista no esté vacía;
 2. consulta cada producto secuencialmente en Catalog;
 3. calcula subtotal, IGV y envío;
-4. abre una transacción local;
-5. inserta la orden y todos los snapshots de ítems;
-6. confirma o revierte la transacción.
-7. después del commit, publica `ORDER_CREATED` como JSON en S3.
+4. reserva todas las unidades en Inventory usando `Idempotency-Key`;
+5. abre una transacción local e inserta la orden y sus snapshots de ítems;
+6. confirma la reserva asociándola al `order_id`;
+7. si MySQL falla, libera la reserva; y
+8. después del commit, publica `ORDER_CREATED` como JSON en S3.
 
-Esta estrategia preserva el historial comercial, pero no garantiza que el usuario exista ni reserva inventario. Tampoco existe idempotencia: reintentar un POST exitoso puede crear otra orden.
+El mismo `Idempotency-Key` y payload devuelve la orden ya creada sin volver a
+descontar stock. Reutilizar la clave con otro payload se rechaza. Al cancelar
+una orden confirmada, Orders solicita a Inventory restaurar el stock una sola
+vez. `user_id` continúa siendo una referencia lógica no validada por Identity.
 
 La publicación se realiza después de confirmar MySQL para evitar eventos de órdenes revertidas. Si S3 falla, la orden se conserva y la respuesta informa `event_published: false`. No hay outbox ni reintento persistente, de modo que el MVP prioriza simplicidad sobre entrega garantizada.
 
@@ -134,15 +149,15 @@ usuario y sesión.
 
 Ingestor simula actividad de navegación, serializa el mismo lote como JSON y Parquet, y particiona ambos por fecha UTC. Ya no genera `ORDER_CREATED`: ese evento se origina en Order Service después de una orden real y se escribe como JSON raw. Analytics consume todos esos JSON bajo el mismo prefijo.
 
-Tres extractores batch complementan los eventos con el estado actual de cada dominio. Catalog Ingestor hace un join de productos, categorías y marcas en PostgreSQL. Orders Ingestor exporta órdenes e ítems por separado desde MySQL. Identity Ingestor recorre MongoDB con un cursor por lotes y una proyección que excluye correo, hash y `_id` antes de construir la tabla. Los extractores usan esquemas Arrow explícitos y escriben Parquet Snappy bajo `processed/snapshots/<dataset>/year=.../month=.../day=.../`.
+Cuatro extractores batch complementan los eventos con el estado actual de cada dominio. Catalog Ingestor hace un join de productos, categorías y marcas en PostgreSQL. Orders Ingestor exporta órdenes e ítems por separado desde MySQL. Identity Ingestor recorre MongoDB con un cursor por lotes y una proyección que excluye correo, hash y `_id`. Inventory Ingestor exporta cantidades físicas, reservadas, vendibles y el indicador de stock bajo. Los extractores usan esquemas Arrow explícitos y escriben Parquet Snappy bajo `processed/snapshots/<dataset>/year=.../month=.../day=.../`.
 
 Cada ejecución captura un único `snapshot_at` UTC y agrega al nombre una hora y un identificador aleatorio. Por ello las ejecuciones son append-only y no sobrescriben snapshots previos. El mismo contenedor admite modo único (`RUN_ONCE=true`) o periódico mediante `SNAPSHOT_INTERVAL_SECONDS`.
 
-Glue Data Catalog define cuatro tablas de snapshots (`products`, `orders`, `order_items`, `users`) y cinco de eventos (`order_events`, `compatibility_events`, `catalog_events`, `identity_events`, `navigation_events`). Las tablas son explícitas y los dos crawlers usan `CatalogTargets`, de modo que agregan particiones y actualizan esquemas sin derivar nombres ni crear duplicados. Los eventos de navegación se escriben como JSON Lines; el resto de productores escribe un único objeto JSON por archivo, ambos compatibles con el SerDe configurado.
+Glue Data Catalog define cinco tablas de snapshots (`products`, `orders`, `order_items`, `users`, `inventory`) y seis de eventos (`order_events`, `compatibility_events`, `catalog_events`, `identity_events`, `navigation_events`, `inventory_events`). Las tablas son explícitas y los dos crawlers usan `CatalogTargets`, de modo que agregan particiones y actualizan esquemas sin derivar nombres ni crear duplicados. Los eventos de navegación se escriben como JSON Lines; el resto de productores escribe un único objeto JSON por archivo, ambos compatibles con el SerDe configurado.
 
 Athena consulta esas tablas mediante el workgroup `hardtech-workgroup`. El workgroup fuerza la salida a `athena-results/`, usa SSE-S3, publica métricas y limita cada consulta a 100 MB escaneados para el MVP. Las consultas batch seleccionan el `snapshot_at` máximo de cada dataset antes de agregar; las consultas de eventos recorren el historial append-only. Una política IAM separada concede lectura de Glue/S3 y escritura exclusiva sobre el prefijo de resultados, pero debe adjuntarse explícitamente al principal que ejecuta Athena.
 
-Analytics selecciona el backend con `ANALYTICS_BACKEND`. En modo `s3`, usado por Compose, pagina y procesa eventos para conservar los dos endpoints originales. En modo `athena`, carga únicamente las nueve consultas SQL versionadas, espera su estado terminal con timeout, pagina resultados y expone metadatos de ejecución. No concatena parámetros del request en SQL.
+Analytics selecciona el backend con `ANALYTICS_BACKEND`. En modo `s3`, usado por Compose, pagina y procesa eventos para conservar los dos endpoints originales. En modo `athena`, carga trece consultas SQL versionadas, espera su estado terminal con timeout, pagina resultados y expone metadatos de ejecución. No concatena parámetros del request en SQL.
 
 S3 ofrece conteo de eventos y top de productos. Athena agrega resumen de ventas, ventas por categoría, conversión, fallos y tasa de compatibilidad, registros por día y embudo. Los cálculos se realizan durante cada request, sin caché ni preagregación; S3 y Athena se recorren con paginación.
 
@@ -282,16 +297,16 @@ Brechas conocidas para un entorno real:
 
 ## 8. Ejecución y despliegue
 
-El Compose raíz construye cinco APIs, el ingestor de navegación y tres servicios de extracción batch, y levanta cuatro componentes de infraestructura. `depends_on` espera los health checks de PostgreSQL, MySQL, MongoDB y LocalStack. Los cuatro productores de eventos esperan que LocalStack esté saludable; Identity también espera MongoDB, y Orders y Compatibility esperan el inicio de Catalog. Cada extractor batch espera su fuente y S3.
+El Compose raíz construye seis APIs, el ingestor de navegación y cuatro servicios de extracción batch, y levanta cuatro componentes de infraestructura. `depends_on` espera los health checks de PostgreSQL, MySQL, MongoDB y LocalStack. Los productores de eventos esperan que LocalStack esté saludable; Identity también espera MongoDB, Orders espera Catalog e Inventory, y Compatibility espera Catalog. Cada extractor batch espera su fuente y S3.
 
 La red `hardtech-net` es externa en el Compose raíz. Esto evita recrearla, pero obliga a provisionarla antes. El Compose de `infrastructure/` crea una red del mismo nombre y publica las bases de datos para desarrollo fuera de contenedores.
 
 Las APIs Python se ejecutan con Uvicorn en un único proceso. Catalog compila TypeScript en una etapa builder y ejecuta JavaScript en una imagen Node Alpine. Compatibility genera un binario Go estático y lo copia a una imagen Alpine.
 
-En AWS, la topología objetivo coloca APIs e ingestors en dos EC2 y PostgreSQL,
-MySQL y MongoDB en una tercera EC2 privada. S3, Glue y Athena son administrados;
-Analytics cambia a `ANALYTICS_BACKEND=athena`. Un Application Load Balancer es
-opcional para la demostración y no está provisionado por el repositorio. La
+En AWS, la topología coloca APIs e ingestors en dos EC2 y PostgreSQL, MySQL y
+MongoDB en una tercera EC2. S3, Glue y Athena son administrados; Analytics
+cambia a `ANALYTICS_BACKEND=athena`. API Gateway entra por VPC Link a un ALB
+interno, que distribuye los seis servicios entre ambas App VM. La
 guía [AWS_DEPLOYMENT.md](AWS_DEPLOYMENT.md) detalla límites, IAM, variables,
 evidencias y eliminación; [COSTS.md](COSTS.md) documenta los factores de costo.
 

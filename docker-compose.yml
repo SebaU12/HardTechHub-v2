@@ -28,6 +28,8 @@ services:
       MYSQL_USER: hardtech
       MYSQL_PASSWORD: hardtech
       MYSQL_ROOT_PASSWORD: root
+      MYSQL_READER_USER: hardtech_reader
+      MYSQL_READER_PASSWORD: hardtech_reader
     command: --default-authentication-plugin=mysql_native_password
     volumes:
       - mysql_data:/var/lib/mysql
@@ -46,6 +48,10 @@ services:
       MONGO_INITDB_ROOT_USERNAME: root
       MONGO_INITDB_ROOT_PASSWORD: root
       MONGO_INITDB_DATABASE: hardtech_identity
+      MONGO_APP_USER: hardtech
+      MONGO_APP_PASSWORD: hardtech
+      MONGO_READER_USER: hardtech_reader
+      MONGO_READER_PASSWORD: hardtech_reader
     volumes:
       - mongodb_data:/data/db
       - ./infrastructure/mongodb/init:/docker-entrypoint-initdb.d:ro
@@ -135,6 +141,7 @@ services:
       MYSQL_USER: hardtech
       MYSQL_PASSWORD: hardtech
       CATALOG_SERVICE_URL: http://catalog-service:8002
+      INVENTORY_SERVICE_URL: http://inventory-service:8006
       AWS_ACCESS_KEY_ID: test
       AWS_SECRET_ACCESS_KEY: test
       AWS_DEFAULT_REGION: us-east-1
@@ -148,6 +155,8 @@ services:
         condition: service_healthy
       catalog-service:
         condition: service_started
+      inventory-service:
+        condition: service_healthy
       localstack:
         condition: service_healthy
     networks:
@@ -197,6 +206,44 @@ services:
     depends_on:
       localstack:
         condition: service_healthy
+    networks:
+      - hardtech-net
+
+  inventory-service:
+    build:
+      context: ./services/inventory-service
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: hardtech_inventory
+      POSTGRES_USER: hardtech_inventory
+      POSTGRES_PASSWORD: hardtech_inventory
+      CATALOG_SERVICE_URL: http://catalog-service:8002
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      S3_ENDPOINT_URL: http://localstack:4566
+      S3_BUCKET: hardtech-datalake
+      S3_EVENTS_PREFIX: raw/events/inventory/
+      RESERVATION_TTL_SECONDS: "600"
+      EXPIRATION_WORKER_ENABLED: "true"
+      EXPIRATION_INTERVAL_SECONDS: "30"
+    ports:
+      - "8006:8006"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      catalog-service:
+        condition: service_started
+      localstack:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8006/health')\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
     networks:
       - hardtech-net
 
@@ -294,6 +341,33 @@ services:
       SNAPSHOT_INTERVAL_SECONDS: "300"
     depends_on:
       mongodb:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+    networks:
+      - hardtech-net
+    restart: unless-stopped
+
+  inventory-ingestor:
+    build:
+      context: ./ingestion
+    command: ["python", "inventory_ingestor.py"]
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+      S3_ENDPOINT_URL: http://localstack:4566
+      S3_BUCKET: hardtech-datalake
+      S3_OUTPUT_PREFIX: processed/snapshots/inventory/
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: hardtech_inventory
+      POSTGRES_USER: hardtech_reader
+      POSTGRES_PASSWORD: hardtech_reader
+      RUN_ONCE: "false"
+      SNAPSHOT_INTERVAL_SECONDS: "300"
+    depends_on:
+      postgres:
         condition: service_healthy
       localstack:
         condition: service_healthy

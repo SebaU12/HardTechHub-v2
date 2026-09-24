@@ -38,14 +38,15 @@ flowchart LR
             TG3[Target Group Orders<br/>8003]
             TG4[Target Group Compatibility<br/>8004]
             TG5[Target Group Analytics<br/>8005]
+            TG6[Target Group Inventory<br/>8006]
 
-            PG[(PostgreSQL 16<br/>hardtech_catalog<br/>TCP 5432)]
+            PG[(PostgreSQL 16<br/>hardtech_catalog + hardtech_inventory<br/>TCP 5432)]
             MY[(MySQL 8<br/>hardtech_orders<br/>TCP 3306)]
             MO[(MongoDB 7<br/>hardtech_identity<br/>TCP 27017)]
         end
 
         S3[(Amazon S3<br/>hardtech-datalake<br/>raw + processed + athena-results)]
-        GLUE[AWS Glue Data Catalog<br/>hardtech_analytics<br/>9 tablas + 2 crawlers]
+        GLUE[AWS Glue Data Catalog<br/>hardtech_analytics<br/>11 tablas + 2 crawlers]
         ATH[Athena<br/>hardtech-workgroup]
     end
 
@@ -61,6 +62,7 @@ flowchart LR
     ALB -->|/api/orders*| TG3
     ALB -->|/api/compatibility*| TG4
     ALB -->|/api/analytics*| TG5
+    ALB -->|/api/inventory*| TG6
 
     TG1 -->|HTTP 8001| APP1
     TG1 -->|HTTP 8001| APP2
@@ -72,6 +74,8 @@ flowchart LR
     TG4 -->|HTTP 8004| APP2
     TG5 -->|HTTP 8005| APP1
     TG5 -->|HTTP 8005| APP2
+    TG6 -->|HTTP 8006| APP1
+    TG6 -->|HTTP 8006| APP2
 
     APP1 -->|TCP 5432| PG
     APP2 -->|TCP 5432| PG
@@ -101,7 +105,7 @@ al ALB de forma directa.
 ## 2. Contenido de las máquinas virtuales
 
 Las dos App VM ejecutan la misma composición Docker y ambas están registradas
-en los cinco target groups. Esto proporciona redundancia: si una App VM se
+en los seis target groups. Esto proporciona redundancia: si una App VM se
 detiene, el ALB continúa enviando solicitudes a la instancia saludable.
 
 ```mermaid
@@ -112,11 +116,14 @@ flowchart LR
         O1[Orders<br/>Python/FastAPI<br/>8003]
         K1[Compatibility<br/>Go<br/>8004]
         N1[Analytics<br/>Python/FastAPI<br/>8005]
+        V1[Inventory<br/>Python/FastAPI<br/>8006]
         G1[Navigation ingestor<br/>cada 30 s]
         CI1[Catalog ingestor<br/>cada 300 s]
         OI1[Orders ingestor<br/>cada 300 s]
         II1[Identity ingestor<br/>cada 300 s]
+        VI1[Inventory ingestor<br/>cada 300 s]
         O1 -->|Docker network · 8002| C1
+        O1 -->|reserva y confirma · 8006| V1
         K1 -->|Docker network · 8002| C1
     end
 
@@ -126,11 +133,14 @@ flowchart LR
         O2[Orders<br/>Python/FastAPI<br/>8003]
         K2[Compatibility<br/>Go<br/>8004]
         N2[Analytics<br/>Python/FastAPI<br/>8005]
+        V2[Inventory<br/>Python/FastAPI<br/>8006]
         G2[Navigation ingestor<br/>cada 30 s]
         CI2[Catalog ingestor<br/>cada 300 s]
         OI2[Orders ingestor<br/>cada 300 s]
         II2[Identity ingestor<br/>cada 300 s]
+        VI2[Inventory ingestor<br/>cada 300 s]
         O2 -->|Docker network · 8002| C2
+        O2 -->|reserva y confirma · 8006| V2
         K2 -->|Docker network · 8002| C2
     end
 
@@ -158,10 +168,14 @@ flowchart LR
     OI2 -->|lector · 3306| MY
     II1 -->|lector · 27017| MO
     II2 -->|lector · 27017| MO
+    V1 -->|5432 · hardtech_inventory| PG
+    V2 -->|5432 · hardtech_inventory| PG
+    VI1 -->|lector · 5432| PG
+    VI2 -->|lector · 5432| PG
 ```
 
-Todos los contenedores de aplicación usan `restart: unless-stopped`. Los cinco
-servicios exponen sus puertos al host; los cuatro procesos de ingesta no exponen
+Todos los contenedores de aplicación usan `restart: unless-stopped`. Los seis
+servicios exponen sus puertos al host; los cinco procesos de ingesta no exponen
 puertos HTTP.
 
 ## 3. Enrutamiento del ALB
@@ -183,6 +197,8 @@ segundos.
 | 41 | `/compatibility/docs*`, `/compatibility/openapi.json` | `hardtech-tg-compatibility` | 8004 |
 | 50 | `/api/analytics*` | `hardtech-tg-analytics` | 8005 |
 | 51 | `/analytics/docs*`, `/analytics/openapi.json` | `hardtech-tg-analytics` | 8005 |
+| 60 | `/api/inventory*` | `hardtech-tg-inventory` | 8006 |
+| 61 | `/inventory/docs*`, `/inventory/openapi.json` | `hardtech-tg-inventory` | 8006 |
 
 API Gateway expone las rutas catch-all `ANY /{proxy+}` y `ANY /`, usa una
 integración privada `HTTP_PROXY`, habilita CORS y reenvía la ruta completa al
@@ -203,7 +219,7 @@ flowchart LR
     INTERNET -->|HTTPS 443| GW
     GW --> VL
     VL -->|TCP 80| LB
-    LB -->|TCP 8001–8005| APP
+    LB -->|TCP 8001–8006| APP
     APP -->|TCP 5432 PostgreSQL| DB
     APP -->|TCP 3306 MySQL| DB
     APP -->|TCP 27017 MongoDB| DB
@@ -215,7 +231,7 @@ flowchart LR
 |---|---:|---|---|
 | API Gateway | 443 | Internet | Endpoint REST público HTTPS |
 | ALB interno | 80 | `SGVPCLink` | Entrada desde API Gateway |
-| App VM | 8001–8005 | `SGALB` | Cinco APIs balanceadas |
+| App VM | 8001–8006 | `SGALB` | Seis APIs balanceadas |
 | App VM | 22 | `0.0.0.0/0` | Administración SSH |
 | Data VM | 5432 | `SGApp` | PostgreSQL |
 | Data VM | 3306 | `SGApp` | MySQL |
@@ -236,6 +252,7 @@ sequenceDiagram
     participant G as API Gateway
     participant L as VPC Link + ALB
     participant O as Order Service :8003
+    participant V as Inventory Service :8006
     participant C as Catalog Service :8002
     participant P as PostgreSQL :5432
     participant M as MySQL :3306
@@ -252,7 +269,10 @@ sequenceDiagram
     C->>P: SELECT productos (TCP 5432)
     P-->>C: Precio y datos
     C-->>O: Productos validados
+    O->>V: Reserva stock (Idempotency-Key)
+    V-->>O: reservation_id
     O->>M: INSERT order + order_items (TCP 3306)
+    O->>V: Confirma reserva con order_id
     O->>S: Publica ORDER_CREATED
     O-->>F: order_id y total
     I->>M: Lee snapshot periódico
@@ -273,15 +293,15 @@ sequenceDiagram
 | S3 | Bucket `hardtech-datalake`, versionado; prefijos `raw/`, `processed/` y `athena-results/` |
 | IAM | `LabRole` mediante `LabInstanceProfile` en las App VM |
 | Glue Database | `hardtech_analytics` |
-| Tablas Glue | 4 snapshots Parquet y 5 tablas de eventos JSON |
+| Tablas Glue | 5 snapshots Parquet y 6 tablas de eventos JSON |
 | Crawlers | `hardtech-snapshots-crawler` y `hardtech-events-crawler` |
 | Athena | Workgroup `hardtech-workgroup`, engine v3, límite de 100 MB por consulta |
 | Resultados | `s3://hardtech-datalake/athena-results/`, SSE-S3, expiración a 30 días |
 
-Los microservicios publican eventos raw y los tres snapshot ingestors copian
+Los microservicios publican eventos raw y los cuatro snapshot ingestors copian
 periódicamente el estado de PostgreSQL, MySQL y MongoDB como Parquet. Glue
 registra esquemas y particiones; Athena ejecuta las consultas utilizadas por el
-quinto microservicio, Analytics.
+microservicio Analytics.
 
 ## 7. Guía para reproducirlo en draw.io
 
@@ -292,9 +312,9 @@ Para obtener una imagen similar al ejemplo, distribuir los elementos así:
 3. Dibujar un contenedor grande **AWS us-east-1** y dentro otro contenedor
    **VPC 172.31.0.0/16**.
 4. En la entrada de la VPC colocar **VPC Link** y luego el **ALB interno**.
-5. Debajo del ALB colocar los cinco target groups con sus puertos.
+5. Debajo del ALB colocar los seis target groups con sus puertos.
 6. Dividir la VPC en dos subredes. App 1 va en Subnet 1 y App 2 en Subnet 2;
-   ambas deben mostrar los cinco servicios Docker.
+   ambas deben mostrar los seis servicios Docker.
 7. Colocar la Data VM en Subnet 1 con PostgreSQL, MySQL y MongoDB.
 8. Fuera de la VPC pero dentro de la región, colocar **S3**, **Glue**,
    **Athena** y **CloudWatch**.
@@ -308,12 +328,12 @@ entre el camino transaccional y el camino analítico.
 ## 8. Texto breve para el informe
 
 > HardTech Hub publica su interfaz React mediante AWS Amplify Hosting y expone
-> los cinco microservicios a través de un HTTP API de Amazon API Gateway. API
+> los seis microservicios a través de un HTTP API de Amazon API Gateway. API
 > Gateway se conecta mediante un VPC Link v2 a un Application Load Balancer
 > interno. El ALB aplica enrutamiento por path y distribuye cada servicio entre
 > dos instancias EC2 ubicadas en subredes diferentes. Ambas instancias ejecutan
-> los servicios Identity, Catalog, Orders, Compatibility y Analytics mediante
-> Docker Compose en los puertos 8001 a 8005. Una tercera instancia EC2 concentra
+> los servicios Identity, Catalog, Orders, Compatibility, Analytics e Inventory
+> mediante Docker Compose en los puertos 8001 a 8006. Una tercera instancia EC2 concentra
 > PostgreSQL, MySQL y MongoDB en los puertos 5432, 3306 y 27017, accesibles solo
 > desde el Security Group de aplicación. Los servicios y procesos de ingesta
 > escriben eventos JSON y snapshots Parquet en Amazon S3. AWS Glue cataloga los
@@ -321,10 +341,11 @@ entre el camino transaccional y el camino analítico.
 > la API REST de Analytics. La infraestructura dispone de balanceo entre dos
 > App VM, comprobaciones de salud y volúmenes gp3 de 40 GiB.
 
-## 9. Extensión planificada: Inventory Service
+## 9. Inventory Service integrado
 
-> Esta sección representa la arquitectura objetivo aprobada en la Fase 0. No
-> forma parte todavía del despliegue mostrado en las secciones anteriores.
+> Esta sección detalla la integración incorporada en las fases 1 a 5. La
+> activación en AWS se completa al actualizar el stack y desplegar el Compose
+> nuevo en las dos App VM.
 
 ```mermaid
 flowchart LR
@@ -345,7 +366,7 @@ flowchart LR
     GLUE --> ATH[Athena]
 ```
 
-Cambios de red planificados:
+Cambios de red incorporados en CloudFormation:
 
 - ampliar `SGApp` desde `8001–8005` hasta `8001–8006`;
 - crear `hardtech-tg-inventory` con ambas App VM y health check `/health`;

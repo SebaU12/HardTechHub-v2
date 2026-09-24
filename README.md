@@ -2,7 +2,8 @@
 
 HardTech Hub es un MVP de comercio electrónico especializado en componentes de PC. El repositorio demuestra una arquitectura de microservicios con persistencia políglota, validación de compatibilidad de hardware y un data lake que combina eventos con snapshots batch de los dominios.
 
-> El alcance actual es un backend local orientado a demostración académica. El frontend en React/AWS Amplify y el despliegue productivo en AWS forman parte de la arquitectura objetivo, pero no están incluidos en este repositorio.
+> El repositorio contiene el backend y su infraestructura AWS reproducible. El
+> frontend React se mantiene en un repositorio separado y se publica en Amplify.
 
 ## Contenido
 
@@ -29,6 +30,7 @@ flowchart TB
     Client --> Orders[Order Service<br/>Python · :8003]
     Client --> Compatibility[Compatibility Service<br/>Go · :8004]
     Client --> Analytics[Analytics Service<br/>Python · :8005]
+    Client --> Inventory[Inventory Service<br/>Python · :8006]
 
     Identity --> Mongo[(MongoDB<br/>usuarios)]
     Identity -->|USER_REGISTERED| S3
@@ -36,17 +38,22 @@ flowchart TB
     Catalog -->|PRODUCT_*| S3
     Orders --> MySQL[(MySQL<br/>órdenes)]
     Orders -->|precio y snapshot| Catalog
+    Orders -->|reserva y confirma stock| Inventory
     Orders -->|ORDER_*| S3
     Compatibility -->|especificaciones| Catalog
     Compatibility -->|COMPATIBILITY_CHECKED| S3
+    Inventory --> Postgres
+    Inventory -->|STOCK_* y RESERVATION_*| S3
 
     Ingestor[Navigation Ingestor<br/>Python] -->|JSON raw + Parquet processed| S3[(S3 / LocalStack<br/>data lake)]
     Postgres --> CatalogBatch[Catalog Ingestor]
     MySQL --> OrdersBatch[Orders Ingestor]
     Mongo --> IdentityBatch[Identity Ingestor]
+    Postgres --> InventoryBatch[Inventory Ingestor]
     CatalogBatch -->|products Parquet| S3
     OrdersBatch -->|orders + items Parquet| S3
     IdentityBatch -->|users sanitizados Parquet| S3
+    InventoryBatch -->|inventory Parquet| S3
     Analytics -->|backend local: lee JSON raw| S3
     S3 --> Glue[AWS Glue Data Catalog]
     Glue --> Athena[Athena<br/>hardtech-workgroup]
@@ -68,9 +75,10 @@ En desarrollo, MongoDB se ejecuta en su propio contenedor y S3 se emula con Loca
 | Catalog Service | Node.js 20, TypeScript, Fastify | 8002 | PostgreSQL 16 + eventos S3 | Productos, categorías, marcas, precios y sus cambios |
 | Order Service | Python 3.11, FastAPI | 8003 | MySQL 8 + publicación en S3 | Creación, consulta, estado y evento de pedidos |
 | Compatibility Service | Go 1.22, `net/http` | 8004 | Eventos S3; sin estado operacional | Reglas de compatibilidad y resultado analítico |
-| Analytics Service | Python 3.11, FastAPI, boto3 | 8005 | S3 local o Athena/Glue | Nueve consultas analíticas expuestas mediante REST |
+| Analytics Service | Python 3.11, FastAPI, boto3 | 8005 | S3 local o Athena/Glue | Trece consultas analíticas expuestas mediante REST |
+| Inventory Service | Python 3.11, FastAPI | 8006 | PostgreSQL + eventos S3 | Stock, ajustes, reservas, confirmación y restauración |
 | Navigation Ingestor | Python 3.11, pandas, PyArrow | — | S3 | Generación y carga periódica de eventos sintéticos |
-| Batch Ingestors | Python 3.11, PyArrow, boto3 | — | PostgreSQL, MySQL, MongoDB → S3 | Snapshots analíticos de productos, órdenes, ítems y usuarios sanitizados |
+| Batch Ingestors | Python 3.11, PyArrow, boto3 | — | PostgreSQL, MySQL, MongoDB → S3 | Snapshots analíticos de productos, órdenes, ítems, usuarios e inventario |
 
 ### API disponible
 
@@ -80,7 +88,8 @@ En desarrollo, MongoDB se ejecuta en su propio contenedor y S3 se emula con Loca
 | Catalog | <http://localhost:8002/docs> | CRUD básico en `/api/products` |
 | Orders | <http://localhost:8003/docs> | Crear, consultar y actualizar órdenes |
 | Compatibility | <http://localhost:8004/docs> | `POST /api/compatibility/check` |
-| Analytics | <http://localhost:8005/docs> | Nueve endpoints sobre S3 local o Athena |
+| Analytics | <http://localhost:8005/docs> | Endpoints sobre S3 local o Athena, incluidos inventario y stock bajo |
+| Inventory | <http://localhost:8006/docs> | Consultar/ajustar stock y gestionar reservas |
 
 Todos exponen `GET /health`. En el estado actual, este endpoint comprueba que el proceso responde, no la disponibilidad de la base de datos ni de servicios dependientes.
 
@@ -168,7 +177,7 @@ Los eventos de navegación siguen siendo sintéticos mientras no exista frontend
 
 - Docker 24 o superior.
 - Docker Compose 2.20 o superior.
-- Puertos `8001` a `8005` libres.
+- Puertos `8001` a `8006` libres.
 
 ### Plataforma completa
 
@@ -180,7 +189,7 @@ docker compose up -d --build
 docker compose ps
 ```
 
-Los contenedores de base de datos no publican puertos al host en este modo; las APIs sí publican `8001`–`8005`.
+Los contenedores de base de datos no publican puertos al host en este modo; las APIs sí publican `8001`–`8006`.
 
 Para detener la plataforma sin borrar datos:
 

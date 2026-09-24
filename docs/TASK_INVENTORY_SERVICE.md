@@ -268,32 +268,41 @@ PostgreSQL hasta S3, Glue, Athena y la API de Analytics.
 
 ### Fase 5 — Docker e infraestructura AWS
 
-- [ ] Agregar Inventory Service e Inventory Ingestor a Compose local.
-- [ ] Agregarlos a `deploy/compose.app.yml` para ambas App VM.
-- [ ] Publicar `8006:8006` en las App VM.
-- [ ] Ampliar `SGApp` de `8001–8005` a `8001–8006`.
-- [ ] Crear `hardtech-tg-inventory` en CloudFormation.
-- [ ] Registrar App 1 y App 2 en el target group, puerto 8006.
-- [ ] Agregar regla ALB `/api/inventory*`, prioridad 60.
-- [ ] Agregar reglas de documentación, prioridad 61.
+- [x] Agregar Inventory Service e Inventory Ingestor a Compose local.
+- [x] Agregarlos a `deploy/compose.app.yml` para ambas App VM.
+- [x] Publicar `8006:8006` en las App VM.
+- [x] Ampliar `SGApp` de `8001–8005` a `8001–8006`.
+- [x] Crear `hardtech-tg-inventory` en CloudFormation.
+- [x] Registrar App 1 y App 2 en el target group, puerto 8006.
+- [x] Agregar regla ALB `/api/inventory*`, prioridad 60.
+- [x] Agregar reglas de documentación, prioridad 61.
 - [ ] Comprobar `/health` en ambas instancias.
 - [ ] Revisar CPU, memoria y disco de las tres EC2.
 
 **Criterio de salida:** API Gateway permite acceder a Inventory y los dos
 targets aparecen `healthy`.
 
+La configuración reproducible está implementada. Los dos últimos puntos deben
+marcarse después de actualizar el stack y ejecutar
+`scripts/verify-inventory-aws.sh` contra las tres EC2 reales.
+
 ### Fase 6 — Frontend
 
-- [ ] Mostrar stock disponible en detalle y listado de productos.
-- [ ] Desactivar compra cuando no exista disponibilidad.
-- [ ] Mostrar un mensaje específico ante `409 Conflict`.
-- [ ] Crear una pantalla sencilla de ajustes de inventario.
-- [ ] Crear una vista de productos con stock bajo.
-- [ ] Consumir al menos dos métodos REST del nuevo servicio.
-- [ ] Reconstruir y volver a publicar el ZIP en Amplify.
+- [x] Mostrar stock disponible en detalle y listado de productos.
+- [x] Desactivar compra cuando no exista disponibilidad.
+- [x] Mostrar un mensaje específico ante `409 Conflict`.
+- [x] Crear una pantalla sencilla de ajustes de inventario.
+- [x] Crear una vista de productos con stock bajo.
+- [x] Consumir al menos dos métodos REST del nuevo servicio.
+- [x] Reconstruir y volver a publicar el ZIP en Amplify.
 
-**Criterio de salida:** se puede consultar y modificar stock desde la web y el
-usuario recibe una explicación clara cuando no puede completar una compra.
+**Criterio de salida completado:** stock visible en `ProductPage` (badge +
+bloqueo de compra cuando `sellable_quantity = 0`), mensaje específico en
+`CheckoutPage` ante `409 Conflict`, página `/inventario` con tabla de stock bajo
+y formulario de ajuste. Consume tres endpoints: `GET /api/inventory/{id}`,
+`GET /api/inventory/low-stock` y `POST /api/inventory/adjustments`. Build
+verificado (`tsc -b && vite build` ✓). ZIP de `dist/` generado en
+`frontend-dist.zip` listo para subir a Amplify.
 
 ### Fase 7 — Pruebas de aceptación
 

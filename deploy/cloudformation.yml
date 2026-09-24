@@ -147,10 +147,10 @@ Resources:
       GroupDescription: "HardTech VMs app - servicios desde ALB y SSH desde VPC"
       VpcId: !Ref VpcId
       SecurityGroupIngress:
-        - Description: "Cinco APIs desde ALB"
+        - Description: "Seis APIs desde ALB"
           IpProtocol: tcp
           FromPort: 8001
-          ToPort: 8005
+          ToPort: 8006
           SourceSecurityGroupId: !Ref SGALB
         - Description: "SSH admin"
           IpProtocol: tcp
@@ -288,6 +288,7 @@ Resources:
       ImageId: !Ref AMI
       InstanceType: !Ref DataInstanceType
       KeyName: !Ref KeyName
+      IamInstanceProfile: !Ref LabInstanceProfileName
       BlockDeviceMappings:
         - DeviceName: /dev/sda1
           Ebs:
@@ -429,6 +430,24 @@ Resources:
         - Id: !Ref AppInstance2
           Port: 8005
 
+  TGInventory:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub "${ProjectName}-tg-inventory"
+      Protocol: HTTP
+      Port: 8006
+      VpcId: !Ref VpcId
+      TargetType: instance
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 30
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+      Targets:
+        - Id: !Ref AppInstance1
+          Port: 8006
+        - Id: !Ref AppInstance2
+          Port: 8006
+
   # ── Listener ALB ─────────────────────────────────────────────────────────
   ALBListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
@@ -525,6 +544,18 @@ Resources:
         - Type: forward
           TargetGroupArn: !Ref TGAnalytics
 
+  RuleInventory:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref ALBListener
+      Priority: 60
+      Conditions:
+        - Field: path-pattern
+          Values: ["/api/inventory*"]
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TGInventory
+
   # ── Reglas ALB: Swagger (Fase 6) ──────────────────────────────────────────
 
   RuleIdentityDocs:
@@ -586,6 +617,18 @@ Resources:
       Actions:
         - Type: forward
           TargetGroupArn: !Ref TGAnalytics
+
+  RuleInventoryDocs:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      ListenerArn: !Ref ALBListener
+      Priority: 61
+      Conditions:
+        - Field: path-pattern
+          Values: ["/inventory/docs*", "/inventory/openapi.json"]
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref TGInventory
 
   # =========================================================================
   # FASE 5 — API Gateway HTTP API + VPC Link v2
@@ -1204,15 +1247,27 @@ Outputs:
     Description: "IP privada de App 1"
     Value: !GetAtt AppInstance1.PrivateIp
 
+  App1InstanceId:
+    Description: "ID de App 1 para SSM y validación operativa"
+    Value: !Ref AppInstance1
+
   App2PrivateIP:
     Description: "IP privada de App 2"
     Value: !GetAtt AppInstance2.PrivateIp
+
+  App2InstanceId:
+    Description: "ID de App 2 para SSM y validación operativa"
+    Value: !Ref AppInstance2
 
   DataPrivateIP:
     Description: "IP privada de la VM de datos — usar como DB_HOST en .env.app"
     Value: !GetAtt DataInstance.PrivateIp
     Export:
       Name: !Sub "${ProjectName}-data-private-ip"
+
+  DataInstanceId:
+    Description: "ID de la VM de datos para SSM y validación operativa"
+    Value: !Ref DataInstance
 
   # ── ALB ───────────────────────────────────────────────────────────────────
   ALBArn:
@@ -1224,6 +1279,10 @@ Outputs:
     Value: !GetAtt ALB.DNSName
     Export:
       Name: !Sub "${ProjectName}-alb-dns"
+
+  InventoryTargetGroupArn:
+    Description: "ARN del target group de Inventory Service"
+    Value: !Ref TGInventory
 
   # ── API Gateway ───────────────────────────────────────────────────────────
   ApiEndpoint:

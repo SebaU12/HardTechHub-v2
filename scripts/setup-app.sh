@@ -26,6 +26,9 @@ cat > "$ENV_FILE" <<EOF
 DB_HOST=$DB_HOST
 POSTGRES_USER=hardtech
 POSTGRES_PASSWORD=Hardtech2026!
+INVENTORY_DB=hardtech_inventory
+INVENTORY_DB_USER=hardtech_inventory
+INVENTORY_DB_PASSWORD=HardtechInventory2026!
 MYSQL_USER=hardtech
 MYSQL_PASSWORD=Hardtech2026!
 MONGO_APP_USER=hardtech
@@ -41,6 +44,8 @@ S3_BUCKET=hardtech-datalake
 ANALYTICS_BACKEND=athena
 ATHENA_DATABASE=hardtech_analytics
 ATHENA_WORKGROUP=hardtech-workgroup
+RESERVATION_TTL_SECONDS=600
+EXPIRATION_INTERVAL_SECONDS=30
 API_BASE_URL=$API_BASE_URL
 INSTANCE_ID=$INSTANCE_ID
 EOF
@@ -51,7 +56,7 @@ docker system prune -f
 
 echo "==> [4/5] Construyendo imágenes una por una (evita OOM en t3.small)..."
 # Los ingestores comparten el mismo contexto (../ingestion), se construye con 'ingestor'
-APP_SERVICES=(identity-service catalog-service order-service compatibility-service analytics-service ingestor)
+APP_SERVICES=(identity-service catalog-service inventory-service order-service compatibility-service analytics-service ingestor)
 
 for svc in "${APP_SERVICES[@]}"; do
   echo ""
@@ -61,8 +66,8 @@ done
 
 echo "==> [5/5] Iniciando todos los servicios..."
 docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --no-deps \
-  identity-service catalog-service order-service compatibility-service analytics-service \
-  ingestor catalog-ingestor orders-ingestor identity-ingestor
+  identity-service catalog-service inventory-service order-service compatibility-service analytics-service \
+  ingestor catalog-ingestor orders-ingestor identity-ingestor inventory-ingestor
 
 echo ""
 echo "Esperando 30s para que arranquen los health checks..."
