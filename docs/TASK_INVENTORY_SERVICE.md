@@ -226,15 +226,15 @@ constraints e idempotencia.
 
 ### Fase 2 — Inventory Service
 
-- [ ] Crear `services/inventory-service/`.
-- [ ] Implementar conexión PostgreSQL con pool.
-- [ ] Implementar consulta de stock y listado de stock bajo.
-- [ ] Implementar ajustes de stock.
-- [ ] Implementar reserva transaccional de varios productos.
-- [ ] Implementar confirmación, liberación y expiración.
-- [ ] Agregar health check y documentación OpenAPI.
-- [ ] Agregar logs estructurados y manejo uniforme de errores.
-- [ ] Agregar pruebas unitarias y de integración.
+- [x] Crear `services/inventory-service/`.
+- [x] Implementar conexión PostgreSQL con pool.
+- [x] Implementar consulta de stock y listado de stock bajo.
+- [x] Implementar ajustes de stock.
+- [x] Implementar reserva transaccional de varios productos.
+- [x] Implementar confirmación, liberación y expiración.
+- [x] Agregar health check y documentación OpenAPI.
+- [x] Agregar logs estructurados y manejo uniforme de errores.
+- [x] Agregar pruebas unitarias y de integración.
 
 **Criterio de salida:** todas las rutas funcionan localmente y una solicitud
 con stock insuficiente no produce reservas parciales.
