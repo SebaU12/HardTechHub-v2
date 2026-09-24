@@ -69,6 +69,16 @@ template = yaml.load(
 )
 resources = template["Resources"]
 
+assert template["Parameters"]["ManageRootVolumes"]["Default"] == "false"
+assert template["Conditions"]["ConfigureRootVolumes"] == [
+    "ManageRootVolumes",
+    "true",
+]
+for instance_name in ("AppInstance1", "AppInstance2", "DataInstance"):
+    mapping = resources[instance_name]["Properties"]["BlockDeviceMappings"]
+    assert mapping[0] == "ConfigureRootVolumes"
+    assert mapping[2] == "AWS::NoValue"
+
 ingress = resources["SGApp"]["Properties"]["SecurityGroupIngress"]
 api_ingress = next(rule for rule in ingress if rule.get("FromPort") == 8001)
 assert api_ingress["ToPort"] == 8005

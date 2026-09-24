@@ -38,6 +38,15 @@ Parameters:
     MinValue: 30
     Description: "Tamaño en GiB del volumen raíz gp3 de la VM de datos"
 
+  ManageRootVolumes:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: >
+      Usar true solo al crear un stack nuevo. En el stack existente debe
+      permanecer false para no reemplazar las EC2 cuyos discos fueron ampliados
+      manualmente.
+
   KeyName:
     Type: AWS::EC2::KeyPair::KeyName
     Description: "Par de claves SSH para administración"
@@ -106,6 +115,9 @@ Parameters:
     Type: String
     Default: "LabInstanceProfile"
     Description: "Nombre del Instance Profile existente en AWS Academy"
+
+Conditions:
+  ConfigureRootVolumes: !Equals [!Ref ManageRootVolumes, "true"]
 
 # ---------------------------------------------------------------------------
 # Resources
@@ -214,13 +226,15 @@ Resources:
       ImageId: !Ref AMI
       InstanceType: !Ref AppInstanceType
       KeyName: !Ref KeyName
-      BlockDeviceMappings:
-        - DeviceName: /dev/sda1
-          Ebs:
-            VolumeSize: !Ref AppRootVolumeSize
-            VolumeType: gp3
-            Encrypted: true
-            DeleteOnTermination: true
+      BlockDeviceMappings: !If
+        - ConfigureRootVolumes
+        - - DeviceName: /dev/sda1
+            Ebs:
+              VolumeSize: !Ref AppRootVolumeSize
+              VolumeType: gp3
+              Encrypted: true
+              DeleteOnTermination: true
+        - !Ref AWS::NoValue
       SubnetId: !Ref AppSubnet1Id
       SecurityGroupIds:
         - !Ref SGApp
@@ -257,13 +271,15 @@ Resources:
       ImageId: !Ref AMI
       InstanceType: !Ref AppInstanceType
       KeyName: !Ref KeyName
-      BlockDeviceMappings:
-        - DeviceName: /dev/sda1
-          Ebs:
-            VolumeSize: !Ref AppRootVolumeSize
-            VolumeType: gp3
-            Encrypted: true
-            DeleteOnTermination: true
+      BlockDeviceMappings: !If
+        - ConfigureRootVolumes
+        - - DeviceName: /dev/sda1
+            Ebs:
+              VolumeSize: !Ref AppRootVolumeSize
+              VolumeType: gp3
+              Encrypted: true
+              DeleteOnTermination: true
+        - !Ref AWS::NoValue
       SubnetId: !Ref AppSubnet2Id
       SecurityGroupIds:
         - !Ref SGApp
@@ -300,13 +316,15 @@ Resources:
       ImageId: !Ref AMI
       InstanceType: !Ref DataInstanceType
       KeyName: !Ref KeyName
-      BlockDeviceMappings:
-        - DeviceName: /dev/sda1
-          Ebs:
-            VolumeSize: !Ref DataRootVolumeSize
-            VolumeType: gp3
-            Encrypted: true
-            DeleteOnTermination: true
+      BlockDeviceMappings: !If
+        - ConfigureRootVolumes
+        - - DeviceName: /dev/sda1
+            Ebs:
+              VolumeSize: !Ref DataRootVolumeSize
+              VolumeType: gp3
+              Encrypted: true
+              DeleteOnTermination: true
+        - !Ref AWS::NoValue
       NetworkInterfaces:
         - DeviceIndex: 0
           SubnetId: !Ref DataSubnetId

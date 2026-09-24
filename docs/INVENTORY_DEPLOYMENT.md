@@ -36,6 +36,16 @@ actual y elija **Update**. Seleccione **Replace current template**, cargue
 confirme la actualización. Espere a que el estado sea
 `UPDATE_COMPLETE` antes de tocar las App VM.
 
+Para actualizar el stack existente, deje obligatoriamente:
+
+```text
+ManageRootVolumes = false
+```
+
+Los discos actuales ya tienen 40 GiB y son `gp2`. Activar esa opción intentaría
+reemplazar las tres EC2 para crear discos `gp3` cifrados. Use `true` únicamente
+al crear un stack nuevo desde cero.
+
 La actualización:
 
 - agrega una regla independiente en `SGApp` para el puerto `8006`, sin
