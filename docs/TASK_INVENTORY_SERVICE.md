@@ -212,15 +212,17 @@ lógica.
 
 ### Fase 1 — Persistencia
 
-- [ ] Crear `hardtech_inventory` en el PostgreSQL de la Data VM.
-- [ ] Crear usuario de escritura exclusivo para Inventory.
-- [ ] Crear usuario `hardtech_reader` con acceso de solo lectura.
-- [ ] Crear las cuatro tablas, constraints e índices.
-- [ ] Preparar script de inicialización idempotente.
-- [ ] Crear un seed reproducible para productos de demostración.
-- [ ] Probar que recrear la Data VM inicializa la base sin pasos manuales.
+- [x] Crear `hardtech_inventory` en el PostgreSQL de la Data VM.
+- [x] Crear usuario de escritura exclusivo para Inventory.
+- [x] Crear usuario `hardtech_reader` con acceso de solo lectura.
+- [x] Crear las cuatro tablas, constraints e índices.
+- [x] Preparar script de inicialización idempotente.
+- [x] Crear un seed reproducible para productos de demostración.
+- [x] Probar que recrear la Data VM inicializa la base sin pasos manuales.
 
-**Criterio de salida:** esquema y seed funcionan desde un volumen vacío.
+**Criterio de salida completado:** `scripts/test-inventory-db.sh` verificó el
+esquema y el seed desde un volumen temporal vacío, además de permisos,
+constraints e idempotencia.
 
 ### Fase 2 — Inventory Service
 

@@ -19,8 +19,9 @@ if (( SEED_COUNT < 20000 )); then
 fi
 
 "$ROOT_DIR/scripts/seed-postgres-20k.sh" "$SEED_COUNT" "${FORCE_ARGUMENT[@]}"
+"$ROOT_DIR/scripts/seed-inventory-20k.sh" "$SEED_COUNT" "${FORCE_ARGUMENT[@]}"
 "$ROOT_DIR/scripts/seed-mysql-20k.sh" "$SEED_COUNT" "${FORCE_ARGUMENT[@]}"
 "$ROOT_DIR/scripts/seed-mongodb-20k.sh" "$SEED_COUNT" "${FORCE_ARGUMENT[@]}"
 "$ROOT_DIR/scripts/verify-seed-counts.sh" "$SEED_COUNT"
 
-echo "Carga masiva completada para los tres motores."
+echo "Carga masiva completada para los tres motores y el dominio de inventario."
