@@ -8,6 +8,7 @@ from typing import Any
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 
 from app.athena_backend import AthenaQueryError, AthenaQueryResult, execute_named_query
 
@@ -137,10 +138,42 @@ app = FastAPI(
     title="Analytics Service",
     version="2.0.0",
     description="Analítica de HardTech Hub con backend S3 local o Amazon Athena.",
-    docs_url="/analytics/docs",
+    docs_url=None,
     openapi_url="/analytics/openapi.json",
     servers=_servers(),
 )
+
+
+@app.get("/analytics/docs", include_in_schema=False)
+def analytics_docs() -> HTMLResponse:
+    # Embed the specification so browser privacy filters cannot block the
+    # secondary fetch merely because its URL contains the word "analytics".
+    specification = json.dumps(app.openapi(), ensure_ascii=False).replace("</", "<\\/")
+    return HTMLResponse(
+        f"""<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Analytics Service - Swagger UI</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">
+  </head>
+  <body>
+    <div id="swagger-ui"></div>
+    <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+    <script>
+      SwaggerUIBundle({{
+        spec: {specification},
+        dom_id: "#swagger-ui",
+        deepLinking: true,
+        docExpansion: "list",
+        presets: [SwaggerUIBundle.presets.apis],
+        layout: "BaseLayout"
+      }});
+    </script>
+  </body>
+</html>"""
+    )
 
 
 @app.get("/health", summary="Estado del servicio")

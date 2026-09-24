@@ -72,6 +72,14 @@ class AnalyticsApiTests(unittest.TestCase):
             example = schema["paths"][path]["get"]["responses"]["200"]["content"]["application/json"].get("example")
             self.assertIsNotNone(example, path)
 
+    def test_swagger_embeds_openapi_without_a_secondary_fetch(self):
+        response = main.analytics_docs()
+        html = response.body.decode("utf-8")
+        self.assertIn("Analytics Service - Swagger UI", html)
+        self.assertIn("spec:", html)
+        self.assertIn('"/api/analytics/events/count"', html)
+        self.assertNotIn('url: "/analytics/openapi.json"', html)
+
     def test_inventory_summary_maps_athena_metadata(self):
         result = AthenaQueryResult(
             rows=[
