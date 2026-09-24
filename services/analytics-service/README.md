@@ -44,8 +44,15 @@ En AWS no configure access keys ni endpoints locales. Asocie a EC2 el rol que te
 | `/api/analytics/compatibility/summary` | — | Sí |
 | `/api/analytics/users/registrations` | — | Sí |
 | `/api/analytics/funnel` | — | Sí |
+| `/api/analytics/inventory/summary` | — | Sí |
+| `/api/analytics/inventory/low-stock` | — | Sí |
 
 Las respuestas Athena incluyen `backend`, `query_execution_id` y `duration_ms`. Los decimales se devuelven como strings para no perder precisión en JSON.
+
+Los dos endpoints de inventario consultan exclusivamente el valor máximo de
+`snapshot_at`; de este modo no agregan accidentalmente extracciones históricas
+completas. El resumen devuelve productos y unidades físicas, reservadas y
+vendibles. La segunda ruta devuelve únicamente los productos bajo su mínimo.
 
 ## Manejo de ejecución
 

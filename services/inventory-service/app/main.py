@@ -19,6 +19,7 @@ from psycopg import Error as PsycopgError
 
 from app.database import database
 from app.errors import DatabaseUnavailable, InventoryError
+from app.events import build_event, publish_events
 from app.models import (
     AdjustmentRequest,
     CancelReservationRequest,
@@ -71,10 +72,18 @@ async def expiration_worker() -> None:
         await asyncio.sleep(interval)
         try:
             expired = await asyncio.to_thread(repository.expire_reservations, batch_size)
-            for reservation_id in expired:
+            for item in expired:
+                reservation = item["reservation"]
+                event = reservation_event("RESERVATION_EXPIRED", reservation)
+                published, keys = await asyncio.to_thread(publish_events, [event])
                 log.info(
-                    "Reservation expired",
-                    extra={"operation": "expire", "reservation_id": str(reservation_id)},
+                    "Reservation expired event_published=%s event_key=%s",
+                    published,
+                    keys[0] if keys else None,
+                    extra={
+                        "operation": "expire",
+                        "reservation_id": str(reservation["reservation_id"]),
+                    },
                 )
         except InventoryError as exc:
             log.error("Expiration pass failed: %s", exc.code, extra={"operation": "expire"})
@@ -177,6 +186,53 @@ def validate_catalog_product(product_id: int) -> None:
     raise InventoryError(503, "CATALOG_UNAVAILABLE", "Catalog Service is unavailable") from last_error
 
 
+def reservation_event(
+    event_type: str,
+    reservation: dict[str, Any],
+    *,
+    order_id: int | None = None,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "reservation_id": str(reservation["reservation_id"]),
+        "status": reservation["status"],
+        "expires_at": reservation["expires_at"].isoformat(),
+        "items": reservation["items"],
+    }
+    if reason is not None:
+        payload["reason"] = reason
+    return build_event(
+        event_type,
+        payload,
+        user_id=reservation.get("_user_id"),
+        order_id=order_id if order_id is not None else reservation.get("order_id"),
+    )
+
+
+def low_stock_event(stock: dict[str, Any]) -> dict[str, Any]:
+    return build_event(
+        "LOW_STOCK_DETECTED",
+        {
+            "available_quantity": stock["available_quantity"],
+            "reserved_quantity": stock["reserved_quantity"],
+            "sellable_quantity": stock["sellable_quantity"],
+            "minimum_quantity": stock["minimum_quantity"],
+        },
+        product_id=stock["product_id"],
+    )
+
+
+def with_publication(
+    result: dict[str, Any], events: list[dict[str, Any]]
+) -> dict[str, Any]:
+    published, keys = publish_events(events)
+    return result | {
+        "event_published": published,
+        "event_key": keys[0] if keys else None,
+        "event_keys": keys,
+    }
+
+
 @app.get("/health", tags=["operations"])
 def healthcheck() -> dict[str, str]:
     return {
@@ -228,7 +284,7 @@ def get_stock(product_id: int) -> dict[str, Any]:
 def adjust_stock(payload: AdjustmentRequest) -> dict[str, Any]:
     if not repository.stock_exists(payload.product_id):
         validate_catalog_product(payload.product_id)
-    result = repository.adjust_stock(
+    result, context = repository.adjust_stock(
         product_id=payload.product_id,
         quantity_delta=payload.quantity_delta,
         minimum_quantity=payload.minimum_quantity,
@@ -238,7 +294,25 @@ def adjust_stock(payload: AdjustmentRequest) -> dict[str, Any]:
         "Stock adjusted",
         extra={"operation": "adjust", "product_id": payload.product_id},
     )
-    return result
+    events = [
+        build_event(
+            "STOCK_ADJUSTED",
+            {
+                "quantity_delta": context["quantity_delta"],
+                "quantity_before": context["quantity_before"],
+                "quantity_after": context["quantity_after"],
+                "available_quantity": result["available_quantity"],
+                "reserved_quantity": result["reserved_quantity"],
+                "sellable_quantity": result["sellable_quantity"],
+                "minimum_quantity": result["minimum_quantity"],
+                "reason": context["reason"],
+            },
+            product_id=payload.product_id,
+        )
+    ]
+    if context["became_low_stock"]:
+        events.append(low_stock_event(result))
+    return with_publication(result, events)
 
 
 @app.post(
@@ -256,7 +330,7 @@ def create_reservation(
     ],
 ) -> dict[str, Any]:
     items = normalize_items(payload.items)
-    reservation, created = repository.create_reservation(
+    reservation, created, low_stock_products = repository.create_reservation(
         idempotency_key=idempotency_key,
         user_id=payload.user_id,
         items=items,
@@ -271,7 +345,11 @@ def create_reservation(
             "status": reservation["status"],
         },
     )
-    return reservation
+    if not created:
+        return reservation
+    events = [reservation_event("STOCK_RESERVED", reservation)]
+    events.extend(low_stock_event(stock) for stock in low_stock_products)
+    return with_publication(reservation, events)
 
 
 @app.post(
@@ -282,7 +360,7 @@ def create_reservation(
 def confirm_reservation(
     reservation_id: UUID, payload: ConfirmReservationRequest
 ) -> dict[str, Any]:
-    result = repository.confirm_reservation(reservation_id, payload.order_id)
+    result, changed = repository.confirm_reservation(reservation_id, payload.order_id)
     log.info(
         "Reservation confirmed",
         extra={
@@ -291,7 +369,12 @@ def confirm_reservation(
             "order_id": payload.order_id,
         },
     )
-    return result
+    if not changed:
+        return result
+    return with_publication(
+        result,
+        [reservation_event("STOCK_CONFIRMED", result, order_id=payload.order_id)],
+    )
 
 
 @app.delete(
@@ -300,12 +383,14 @@ def confirm_reservation(
     tags=["reservations"],
 )
 def release_reservation(reservation_id: UUID) -> dict[str, Any]:
-    result = repository.release_reservation(reservation_id)
+    result, changed = repository.release_reservation(reservation_id)
     log.info(
         "Reservation released",
         extra={"operation": "release", "reservation_id": str(reservation_id)},
     )
-    return result
+    if not changed:
+        return result
+    return with_publication(result, [reservation_event("STOCK_RELEASED", result)])
 
 
 @app.post(
@@ -316,7 +401,9 @@ def release_reservation(reservation_id: UUID) -> dict[str, Any]:
 def cancel_reservation(
     reservation_id: UUID, payload: CancelReservationRequest
 ) -> dict[str, Any]:
-    result = repository.cancel_reservation(reservation_id, payload.order_id, payload.reason.strip())
+    result, changed = repository.cancel_reservation(
+        reservation_id, payload.order_id, payload.reason.strip()
+    )
     log.info(
         "Confirmed sale cancelled",
         extra={
@@ -325,4 +412,16 @@ def cancel_reservation(
             "order_id": payload.order_id,
         },
     )
-    return result
+    if not changed:
+        return result
+    return with_publication(
+        result,
+        [
+            reservation_event(
+                "STOCK_RESTORED",
+                result,
+                order_id=payload.order_id,
+                reason=payload.reason,
+            )
+        ],
+    )

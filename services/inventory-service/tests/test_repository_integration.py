@@ -121,36 +121,42 @@ class RepositoryIntegrationTests(unittest.TestCase):
     def test_reserve_confirm_and_cancel_are_idempotent(self):
         key = "key-confirm-00000000001"
         items = [{"product_id": 1, "quantity": 2}]
-        reservation, created = self.repository.create_reservation(key, "usr-1", items)
-        replay, replay_created = self.repository.create_reservation(key, "usr-1", items)
+        reservation, created, _ = self.repository.create_reservation(key, "usr-1", items)
+        replay, replay_created, _ = self.repository.create_reservation(key, "usr-1", items)
         self.assertTrue(created)
         self.assertFalse(replay_created)
         self.assertEqual(reservation["reservation_id"], replay["reservation_id"])
         self.assertEqual(self.repository.get_stock(1)["reserved_quantity"], 2)
 
-        confirmed = self.repository.confirm_reservation(reservation["reservation_id"], 101)
-        self.repository.confirm_reservation(reservation["reservation_id"], 101)
+        confirmed, confirmed_changed = self.repository.confirm_reservation(
+            reservation["reservation_id"], 101
+        )
+        _, replay_changed = self.repository.confirm_reservation(reservation["reservation_id"], 101)
+        self.assertTrue(confirmed_changed)
+        self.assertFalse(replay_changed)
         self.assertEqual(confirmed["status"], "CONFIRMED")
         self.assertEqual(self.repository.get_stock(1)["available_quantity"], 3)
 
-        cancelled = self.repository.cancel_reservation(
+        cancelled, cancelled_changed = self.repository.cancel_reservation(
             reservation["reservation_id"], 101, "customer cancelled"
         )
-        self.repository.cancel_reservation(
+        _, replay_cancelled_changed = self.repository.cancel_reservation(
             reservation["reservation_id"], 101, "customer cancelled"
         )
+        self.assertTrue(cancelled_changed)
+        self.assertFalse(replay_cancelled_changed)
         self.assertEqual(cancelled["status"], "CANCELLED")
         self.assertEqual(self.repository.get_stock(1)["available_quantity"], 5)
 
     def test_release_and_expiration_restore_sellable_stock(self):
-        first, _ = self.repository.create_reservation(
+        first, _, _ = self.repository.create_reservation(
             "key-release-00000000001", "usr-1", [{"product_id": 1, "quantity": 1}]
         )
         self.repository.release_reservation(first["reservation_id"])
         self.repository.release_reservation(first["reservation_id"])
         self.assertEqual(self.repository.get_stock(1)["reserved_quantity"], 0)
 
-        second, _ = self.repository.create_reservation(
+        second, _, _ = self.repository.create_reservation(
             "key-expire-00000000001", "usr-1", [{"product_id": 1, "quantity": 2}]
         )
         with self.pool.connection() as conn:
@@ -159,7 +165,7 @@ class RepositoryIntegrationTests(unittest.TestCase):
                 (datetime.now(timezone.utc) - timedelta(seconds=1), second["reservation_id"]),
             )
         expired = self.repository.expire_reservations()
-        self.assertIn(second["reservation_id"], expired)
+        self.assertEqual(expired[0]["reservation"]["reservation_id"], second["reservation_id"])
         self.assertEqual(self.repository.get_stock(1)["reserved_quantity"], 0)
 
     def test_concurrent_reservations_cannot_oversell(self):

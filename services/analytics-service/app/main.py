@@ -288,3 +288,56 @@ def user_registrations() -> dict[str, Any]:
 def funnel() -> dict[str, Any]:
     result = require_athena("funnel")
     return athena_response(result, "funnel", result.rows[0] if result.rows else {})
+
+
+@app.get(
+    "/api/analytics/inventory/summary",
+    summary="Resumen del snapshot de inventario más reciente",
+    responses=documented_response(
+        {
+            "inventory_summary": {
+                "total_products": 20000,
+                "physical_units": 400000,
+                "reserved_units": 125,
+                "sellable_units": 399875,
+                "low_stock_products": 18,
+                "snapshot_at": "2026-09-23 16:00:00.000",
+            },
+            "backend": "athena",
+            "query_execution_id": "query-123",
+            "duration_ms": 42,
+        }
+    ),
+)
+def inventory_summary() -> dict[str, Any]:
+    result = require_athena("inventory_summary")
+    return athena_response(
+        result,
+        "inventory_summary",
+        result.rows[0] if result.rows else {},
+    )
+
+
+@app.get(
+    "/api/analytics/inventory/low-stock",
+    summary="Productos con stock bajo en el snapshot más reciente",
+    responses=documented_response(
+        {
+            "low_stock": [
+                {
+                    "product_id": 7,
+                    "available_quantity": 3,
+                    "reserved_quantity": 1,
+                    "sellable_quantity": 2,
+                    "minimum_quantity": 2,
+                }
+            ],
+            "backend": "athena",
+            "query_execution_id": "query-456",
+            "duration_ms": 38,
+        }
+    ),
+)
+def inventory_low_stock() -> dict[str, Any]:
+    result = require_athena("inventory_low_stock")
+    return athena_response(result, "low_stock", result.rows)

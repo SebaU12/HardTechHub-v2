@@ -24,6 +24,7 @@ def reservation_payload(reservation_id=None):
         "expires_at": NOW + timedelta(minutes=10),
         "order_id": None,
         "items": [{"product_id": 1, "quantity": 3}],
+        "_user_id": "usr_001",
     }
 
 
@@ -80,14 +81,18 @@ class InventoryApiTests(unittest.TestCase):
         with patch.object(
             main.repository,
             "create_reservation",
-            side_effect=[(reservation_payload(), True), (reservation_payload(), False)],
-        ):
+            side_effect=[
+                (reservation_payload(), True, []),
+                (reservation_payload(), False, []),
+            ],
+        ), patch.object(main, "publish_events", return_value=(True, ["event-key"])) as publish:
             first_response = Response(status_code=201)
             replay_response = Response(status_code=201)
             main.create_reservation(first_response, body, key)
             main.create_reservation(replay_response, body, key)
         self.assertEqual(first_response.status_code, 201)
         self.assertEqual(replay_response.status_code, 200)
+        publish.assert_called_once()
 
     def test_business_errors_use_uniform_contract(self):
         error = conflict(
@@ -126,7 +131,20 @@ class InventoryApiTests(unittest.TestCase):
         }
         with patch.object(main.repository, "stock_exists", return_value=False), patch.object(
             main, "validate_catalog_product"
-        ) as catalog, patch.object(main.repository, "adjust_stock", return_value=stock):
+        ) as catalog, patch.object(
+            main.repository,
+            "adjust_stock",
+            return_value=(
+                stock,
+                {
+                    "quantity_delta": 10,
+                    "quantity_before": 0,
+                    "quantity_after": 10,
+                    "reason": "Initial delivery",
+                    "became_low_stock": False,
+                },
+            ),
+        ), patch.object(main, "publish_events", return_value=(True, ["event-key"])):
             response = main.adjust_stock(
                 main.AdjustmentRequest(
                     product_id=7,
@@ -137,6 +155,39 @@ class InventoryApiTests(unittest.TestCase):
             )
         self.assertEqual(response["available_quantity"], 10)
         catalog.assert_called_once_with(7)
+
+    def test_s3_failure_does_not_rollback_committed_adjustment(self):
+        stock = {
+            "product_id": 7,
+            "available_quantity": 10,
+            "reserved_quantity": 0,
+            "sellable_quantity": 10,
+            "minimum_quantity": 2,
+            "low_stock": False,
+            "updated_at": NOW,
+        }
+        context = {
+            "quantity_delta": 10,
+            "quantity_before": 0,
+            "quantity_after": 10,
+            "reason": "Initial delivery",
+            "became_low_stock": False,
+        }
+        with patch.object(main.repository, "stock_exists", return_value=True), patch.object(
+            main.repository, "adjust_stock", return_value=(stock, context)
+        ) as committed, patch.object(main, "publish_events", return_value=(False, [])):
+            response = main.adjust_stock(
+                main.AdjustmentRequest(
+                    product_id=7,
+                    quantity_delta=10,
+                    minimum_quantity=2,
+                    reason="Initial delivery",
+                )
+            )
+        committed.assert_called_once()
+        self.assertEqual(response["available_quantity"], 10)
+        self.assertFalse(response["event_published"])
+        self.assertIsNone(response["event_key"])
 
     def test_validation_errors_have_a_stable_code(self):
         with self.assertRaises(ValidationError):

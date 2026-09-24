@@ -840,6 +840,39 @@ Resources:
             - {Name: created_at, Type: timestamp}
             - {Name: snapshot_at, Type: timestamp}
 
+  GlueTableInventory:
+    Type: AWS::Glue::Table
+    DependsOn: GlueDatabase
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref GlueDatabaseName
+      TableInput:
+        Name: inventory
+        Description: "Inventory stock snapshots extraídos de PostgreSQL."
+        TableType: EXTERNAL_TABLE
+        Parameters: {EXTERNAL: "TRUE", classification: parquet}
+        PartitionKeys:
+          - {Name: year, Type: string}
+          - {Name: month, Type: string}
+          - {Name: day, Type: string}
+        StorageDescriptor:
+          Location: !Sub "s3://${DataLakeBucketName}/processed/snapshots/inventory/"
+          InputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe
+          Columns:
+            - {Name: product_id, Type: bigint}
+            - {Name: available_quantity, Type: bigint}
+            - {Name: reserved_quantity, Type: bigint}
+            - {Name: sellable_quantity, Type: bigint}
+            - {Name: minimum_quantity, Type: bigint}
+            - {Name: low_stock, Type: boolean}
+            - {Name: version, Type: bigint}
+            - {Name: created_at, Type: timestamp}
+            - {Name: updated_at, Type: timestamp}
+            - {Name: snapshot_at, Type: timestamp}
+
   # ── Glue Tables: Eventos JSON Lines ──────────────────────────────────────
 
   GlueTableOrderEvents:
@@ -1017,6 +1050,41 @@ Resources:
             - Name: payload
               Type: "struct<category:string>"
 
+  GlueTableInventoryEvents:
+    Type: AWS::Glue::Table
+    DependsOn: GlueDatabase
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref GlueDatabaseName
+      TableInput:
+        Name: inventory_events
+        Description: "Eventos de ajustes, reservas y transiciones de inventario."
+        TableType: EXTERNAL_TABLE
+        Parameters: {EXTERNAL: "TRUE", classification: json}
+        PartitionKeys:
+          - {Name: year, Type: string}
+          - {Name: month, Type: string}
+          - {Name: day, Type: string}
+        StorageDescriptor:
+          Location: !Sub "s3://${DataLakeBucketName}/raw/events/inventory/"
+          InputFormat: org.apache.hadoop.mapred.TextInputFormat
+          OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+          SerdeInfo:
+            SerializationLibrary: org.openx.data.jsonserde.JsonSerDe
+            Parameters:
+              ignore.malformed.json: "false"
+          Columns:
+            - {Name: event_id, Type: string}
+            - {Name: event_type, Type: string}
+            - {Name: timestamp, Type: string}
+            - {Name: source, Type: string}
+            - {Name: user_id, Type: string}
+            - {Name: session_id, Type: string}
+            - {Name: product_id, Type: bigint}
+            - {Name: order_id, Type: bigint}
+            - Name: payload
+              Type: "struct<reservation_id:string,status:string,expires_at:string,quantity_delta:bigint,quantity_before:bigint,quantity_after:bigint,available_quantity:bigint,reserved_quantity:bigint,sellable_quantity:bigint,minimum_quantity:bigint,reason:string,items:array<struct<product_id:bigint,quantity:bigint>>>"
+
   # ── Glue Crawlers ────────────────────────────────────────────────────────
 
   SnapshotsCrawler:
@@ -1026,6 +1094,7 @@ Resources:
       - GlueTableOrders
       - GlueTableOrderItems
       - GlueTableUsers
+      - GlueTableInventory
     Properties:
       Name: !Ref SnapshotsCrawlerName
       Description: "Actualiza esquemas y particiones de fecha para snapshots Parquet."
@@ -1039,6 +1108,7 @@ Resources:
               - orders
               - order_items
               - users
+              - inventory
       RecrawlPolicy:
         RecrawlBehavior: CRAWL_EVERYTHING
       SchemaChangePolicy:
@@ -1054,6 +1124,7 @@ Resources:
       - GlueTableCatalogEvents
       - GlueTableIdentityEvents
       - GlueTableNavigationEvents
+      - GlueTableInventoryEvents
     Properties:
       Name: !Ref EventsCrawlerName
       Description: "Actualiza esquemas y particiones de fecha para eventos JSON."
@@ -1068,6 +1139,7 @@ Resources:
               - catalog_events
               - identity_events
               - navigation_events
+              - inventory_events
       RecrawlPolicy:
         RecrawlBehavior: CRAWL_EVERYTHING
       SchemaChangePolicy:

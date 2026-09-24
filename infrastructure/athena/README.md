@@ -57,6 +57,10 @@ El timeout predeterminado es de cinco minutos por consulta y puede ajustarse con
 | `07_compatible_build_rate.sql` | Porcentaje de builds compatibles |
 | `08_user_registrations_by_day.sql` | Registros de usuarios por fecha |
 | `09_view_compatibility_order_funnel.sql` | Embudo entre navegación, compatibilidad y compra |
+| `10_inventory_summary.sql` | Resumen del snapshot de inventario más reciente |
+| `11_inventory_low_stock.sql` | Productos bajo el mínimo en el snapshot más reciente |
+| `12_inventory_event_activity.sql` | Actividad diaria por tipo de evento de inventario |
+| `13_inventory_product_rotation.sql` | Unidades confirmadas y confirmaciones por producto |
 
 Las consultas de snapshots filtran por el `snapshot_at` más reciente para no sumar varias exportaciones completas de la misma base operacional.
 

@@ -254,14 +254,14 @@ suficiente, y dos compras simultáneas no pueden vender la misma última unidad.
 
 ### Fase 4 — Eventos e ingesta analítica
 
-- [ ] Publicar eventos de inventario en S3 después de cada transición válida.
-- [ ] Crear `inventory-ingestor` para snapshots Parquet.
-- [ ] Crear prefijo `processed/snapshots/inventory/`.
-- [ ] Crear tabla Glue `inventory`.
-- [ ] Crear tabla Glue `inventory_events`.
-- [ ] Incluir ambas tablas en los crawlers correspondientes.
-- [ ] Crear consultas Athena de stock bajo, movimientos y rotación.
-- [ ] Incorporar endpoints analíticos en Analytics Service.
+- [x] Publicar eventos de inventario en S3 después de cada transición válida.
+- [x] Crear `inventory-ingestor` para snapshots Parquet.
+- [x] Crear prefijo `processed/snapshots/inventory/`.
+- [x] Crear tabla Glue `inventory`.
+- [x] Crear tabla Glue `inventory_events`.
+- [x] Incluir ambas tablas en los crawlers correspondientes.
+- [x] Crear consultas Athena de stock bajo, movimientos y rotación.
+- [x] Incorporar endpoints analíticos en Analytics Service.
 
 **Criterio de salida:** un ajuste y una compra pueden rastrearse desde
 PostgreSQL hasta S3, Glue, Athena y la API de Analytics.
