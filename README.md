@@ -542,6 +542,8 @@ Las credenciales y secretos incluidos son exclusivamente locales. Para cualquier
     ├── AWS_DEPLOYMENT.md               # Despliegue, IAM y eliminación
     ├── COSTS.md                        # Costos y controles de consumo
     ├── DEMO.md                         # Prueba integral y evidencias
+    ├── DIAGRAMA_ARQUITECTURA_AWS.md    # Despliegue AWS, redes, VMs y puertos
+    ├── DIAGRAMA_ENTIDAD_RELACION.md    # Esquemas operacionales y catálogo Glue
     ├── EVENTS.md                       # Contratos analíticos
     ├── SEEDING.md                      # Carga reproducible de 20,000 registros
     └── TROUBLESHOOTING.md              # Diagnóstico local y AWS
@@ -568,6 +570,10 @@ Estas observaciones están desarrolladas y priorizadas en [Arquitectura técnica
 ## Documentación adicional
 
 - [Arquitectura técnica y decisiones](docs/ARCHITECTURE.md)
+- [Diagrama de arquitectura AWS](docs/DIAGRAMA_ARQUITECTURA_AWS.md)
+- [Diagrama entidad–relación y diccionario de datos](docs/DIAGRAMA_ENTIDAD_RELACION.md)
+- [Plan del microservicio de inventario](docs/TASK_INVENTORY_SERVICE.md)
+- [Diseño aprobado del microservicio de inventario](docs/INVENTORY_DESIGN.md)
 - [Contratos de eventos](docs/EVENTS.md)
 - [Infraestructura local](infrastructure/README.md)
 - [Ejecución de ingesta batch en EC2](docs/EC2_INGESTION.md)
